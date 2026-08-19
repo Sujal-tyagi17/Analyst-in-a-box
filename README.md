@@ -194,6 +194,3 @@ For HF Spaces (Docker SDK): push the repo, add the key under **Repository secret
 
 ---
 
-## License
-
-[MIT](LICENSE) — free to use, modify, and share.
