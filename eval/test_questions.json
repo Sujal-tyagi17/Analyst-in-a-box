@@ -1,0 +1,109 @@
+[
+  {
+    "dataset": "sales",
+    "question": "Which region has the highest total revenue?",
+    "check": "value_in_answer",
+    "expected_sql": "SELECT region FROM sales GROUP BY region ORDER BY SUM(revenue) DESC LIMIT 1"
+  },
+  {
+    "dataset": "sales",
+    "question": "What is the total number of orders?",
+    "check": "value_in_answer",
+    "expected_sql": "SELECT COUNT(*) FROM sales"
+  },
+  {
+    "dataset": "sales",
+    "question": "What is the average revenue per order across all orders?",
+    "check": "value_in_answer",
+    "expected_sql": "SELECT ROUND(AVG(revenue), 0) FROM sales",
+    "tolerance": 0.05
+  },
+  {
+    "dataset": "sales",
+    "question": "Show me total revenue by category as a chart.",
+    "check": "chart_made"
+  },
+  {
+    "dataset": "sales",
+    "question": "Are there any unusual outlier orders in revenue?",
+    "check": "analysis_method",
+    "expected_method": "outliers"
+  },
+  {
+    "dataset": "sales",
+    "question": "Which product category sold the most units in total?",
+    "check": "value_in_answer",
+    "expected_sql": "SELECT category FROM sales GROUP BY category ORDER BY SUM(units) DESC LIMIT 1"
+  },
+  {
+    "dataset": "sports",
+    "question": "Which team scored the most total points across all seasons?",
+    "check": "value_in_answer",
+    "expected_sql": "SELECT team FROM sports GROUP BY team ORDER BY SUM(points) DESC LIMIT 1"
+  },
+  {
+    "dataset": "sports",
+    "question": "How many teams are there in the dataset?",
+    "check": "value_in_answer",
+    "expected_sql": "SELECT COUNT(DISTINCT team) FROM sports"
+  },
+  {
+    "dataset": "sports",
+    "question": "What is the highest number of wins by any team in a single season?",
+    "check": "value_in_answer",
+    "expected_sql": "SELECT MAX(wins) FROM sports"
+  },
+  {
+    "dataset": "sports",
+    "question": "Is there a correlation between goals scored and points?",
+    "check": "analysis_method",
+    "expected_method": "correlation"
+  },
+  {
+    "dataset": "sports",
+    "question": "Show average points per season as a chart.",
+    "check": "chart_made"
+  },
+  {
+    "dataset": "sports",
+    "question": "Which season had the most total goals scored across all teams?",
+    "check": "value_in_answer",
+    "expected_sql": "SELECT season FROM sports GROUP BY season ORDER BY SUM(goals_for) DESC LIMIT 1"
+  },
+  {
+    "dataset": "education",
+    "question": "What is the average exam score?",
+    "check": "value_in_answer",
+    "expected_sql": "SELECT ROUND(AVG(exam_score), 0) FROM education",
+    "tolerance": 0.05
+  },
+  {
+    "dataset": "education",
+    "question": "Is there a correlation between study hours and exam scores?",
+    "check": "analysis_method",
+    "expected_method": "correlation"
+  },
+  {
+    "dataset": "education",
+    "question": "How many students are in grade level 12?",
+    "check": "value_in_answer",
+    "expected_sql": "SELECT COUNT(*) FROM education WHERE grade_level = 12"
+  },
+  {
+    "dataset": "education",
+    "question": "Do male and female students differ in average exam score?",
+    "check": "analysis_method",
+    "expected_method": "group_compare"
+  },
+  {
+    "dataset": "education",
+    "question": "What is the highest exam score achieved?",
+    "check": "value_in_answer",
+    "expected_sql": "SELECT MAX(exam_score) FROM education"
+  },
+  {
+    "dataset": "education",
+    "question": "Show the distribution of average exam score by grade level as a chart.",
+    "check": "chart_made"
+  }
+]

@@ -1,0 +1,13 @@
+services:
+  analyst-in-a-box:
+    build: .
+    ports:
+      - "8501:8501"
+    environment:
+      # Provider + keys are read from your shell / .env — never committed.
+      - LLM_PROVIDER=${LLM_PROVIDER:-anthropic}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - MAX_SESSION_QUESTIONS=${MAX_SESSION_QUESTIONS:-15}
+      - MAX_DAILY_QUESTIONS=${MAX_DAILY_QUESTIONS:-200}
+    restart: unless-stopped

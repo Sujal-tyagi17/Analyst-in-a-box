@@ -1,0 +1,42 @@
+{
+  "rate": 1.0,
+  "passed": 3,
+  "total": 3,
+  "results": [
+    {
+      "n": 1,
+      "dataset": "sales",
+      "question": "Which region has the highest total revenue?",
+      "check": "value_in_answer",
+      "passed": true,
+      "detail": "expected~=West",
+      "sql": [
+        "SELECT region, ROUND(SUM(revenue), 2) AS total_revenue, COUNT(order_id) AS total_orders, SUM(units) AS total_units FROM sales GROUP BY region ORDER BY total_revenue DESC\nLIMIT 5000"
+      ]
+    },
+    {
+      "n": 2,
+      "dataset": "sales",
+      "question": "What is the total number of orders?",
+      "check": "value_in_answer",
+      "passed": true,
+      "detail": "expected~=800",
+      "sql": [
+        "SELECT COUNT(*) AS total_orders, COUNT(DISTINCT order_id) AS distinct_orders FROM sales\nLIMIT 5000",
+        "SELECT SUM(revenue) AS total_revenue, SUM(units) AS total_units, AVG(revenue) AS avg_order_value FROM sales\nLIMIT 5000"
+      ]
+    },
+    {
+      "n": 3,
+      "dataset": "sales",
+      "question": "What is the average revenue per order across all orders?",
+      "check": "value_in_answer",
+      "passed": true,
+      "detail": "expected~=2616.0",
+      "sql": [
+        "SELECT AVG(revenue) AS avg_revenue, SUM(revenue) AS total_revenue, COUNT(order_id) AS total_orders FROM sales\nLIMIT 5000",
+        "SELECT category, COUNT(order_id) AS order_count, SUM(revenue) AS category_revenue, AVG(revenue) AS avg_revenue FROM sales GROUP BY category ORDER BY category_revenue DESC\nLIMIT 5000"
+      ]
+    }
+  ]
+}

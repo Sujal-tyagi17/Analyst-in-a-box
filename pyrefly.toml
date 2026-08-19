@@ -1,0 +1,10 @@
+# Pyrefly configuration
+# Point the type-checker at the project's virtual environment so that
+# third-party packages (sqlalchemy, matplotlib, scipy, statsmodels, etc.) are resolved.
+
+python_interpreter = "C:\\Users\\tyagi\\Desktop\\analyst-in-a-box-main\\.venv\\Scripts\\python.exe"
+
+[python.site_package_path]
+path = [
+  "C:\\Users\\tyagi\\Desktop\\analyst-in-a-box-main\\.venv\\Lib\\site-packages",
+]
