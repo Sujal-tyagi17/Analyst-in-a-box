@@ -14,7 +14,7 @@ import streamlit as st
 
 # Allow API keys / config to come from Streamlit Secrets (never committed).
 for _k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY", "GEMINI_API_KEY",
-           "LLM_PROVIDER", "ANTHROPIC_MODEL", "OPENAI_MODEL", "GROQ_MODEL", "GEMINI_MODEL"):
+           "LLM_PROVIDER", "LLM_FALLBACK", "ANTHROPIC_MODEL", "OPENAI_MODEL", "GROQ_MODEL", "GEMINI_MODEL"):
     try:
         if _k in st.secrets and not os.environ.get(_k):
             os.environ[_k] = str(st.secrets[_k])
@@ -194,6 +194,8 @@ def _render_result(res):
         with st.expander("📈 Statistical analysis", expanded=False):
             for a in res.analyses:
                 st.json(a)
+    if getattr(res, "fallback_note", None):
+        st.caption(f"↪️ {res.fallback_note}")
     if res.error:
         st.error(res.answer)
     else:

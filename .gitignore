@@ -26,3 +26,4 @@ data/*.sqlite
 Thumbs.db
 .idea/
 .vscode/
+!.env.example

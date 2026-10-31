@@ -55,6 +55,8 @@ class AgentResult:
     charts: list[dict] = field(default_factory=list)   # {"image_base64":..., "title":...}
     analyses: list[dict] = field(default_factory=list)
     error: str | None = None
+    provider_used: str | None = None    # provider that produced this answer
+    fallback_note: str | None = None    # set when a fallback provider answered
 
 
 # ---------------------------------------------------------------------------
@@ -356,6 +358,30 @@ def _run_openai_compatible(system: str, question: str, runner: _ToolRunner,
 # Public entrypoint
 # ---------------------------------------------------------------------------
 
+def _key_env_for(provider: str) -> str | None:
+    if provider == "anthropic":
+        return "ANTHROPIC_API_KEY"
+    if provider in OPENAI_COMPATIBLE:
+        return OPENAI_COMPATIBLE[provider]["key_env"]
+    return None
+
+
+def _provider_chain(primary: str) -> list[str]:
+    """Primary provider first, then fallbacks from LLM_FALLBACK (default: groq,gemini).
+
+    Fallback providers without an API key configured are skipped.
+    """
+    raw = os.environ.get("LLM_FALLBACK", "groq,gemini")
+    chain = [primary]
+    for p in (x.strip().lower() for x in raw.split(",")):
+        if not p or p in chain or p == "mock":
+            continue
+        key_env = _key_env_for(p)
+        if key_env and os.environ.get(key_env):
+            chain.append(p)
+    return chain
+
+
 def answer_question(
     question: str,
     db_path: str,
@@ -363,9 +389,38 @@ def answer_question(
     provider: str | None = None,
     history: list[dict] | None = None,
 ) -> AgentResult:
-    """Run the full agent loop for one question. Never raises — errors are captured."""
-    provider = (provider or os.environ.get("LLM_PROVIDER", "anthropic")).lower()
-    result = AgentResult(answer="")
+    """Answer with the primary provider; if it fails, retry on each fallback provider.
+
+    Never raises — errors are captured on the returned AgentResult.
+    """
+    primary = (provider or os.environ.get("LLM_PROVIDER", "groq")).lower()
+    failures: list[str] = []
+    result: AgentResult | None = None
+    for p in _provider_chain(primary):
+        result = _answer_with_provider(question, db_path, schema_text, p, history)
+        if not result.error:
+            if failures:
+                result.fallback_note = f"Answered by {p} (fallback) — " + "; ".join(failures)
+            return result
+        failures.append(f"{p} failed: {result.error}")
+    if result is not None and len(failures) > 1:
+        result.error = " | ".join(failures)
+        result.answer = (
+            "All configured LLM providers failed (bad/missing key, rate limit, or "
+            f"network timeout). Details: {result.error}"
+        )
+    return result
+
+
+def _answer_with_provider(
+    question: str,
+    db_path: str,
+    schema_text: str,
+    provider: str,
+    history: list[dict] | None = None,
+) -> AgentResult:
+    """Run the full agent loop for one question on one provider. Never raises."""
+    result = AgentResult(answer="", provider_used=provider)
     runner = _ToolRunner(db_path, result)
     system = build_system_prompt(schema_text)
 

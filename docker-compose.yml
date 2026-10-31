@@ -5,7 +5,10 @@ services:
       - "8501:8501"
     environment:
       # Provider + keys are read from your shell / .env — never committed.
-      - LLM_PROVIDER=${LLM_PROVIDER:-anthropic}
+      - LLM_PROVIDER=${LLM_PROVIDER:-groq}
+      - LLM_FALLBACK=${LLM_FALLBACK:-groq,gemini}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - MAX_SESSION_QUESTIONS=${MAX_SESSION_QUESTIONS:-15}
