@@ -39,7 +39,9 @@ import pandas as pd
 from agent import schema_reader, usage, ui
 from agent.answer_cache import AnswerCache
 from agent.orchestrator import answer_question, AgentResult, log
+import queue
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from analytics import cleaning, eda, profiling, report
 from analytics.charts import CONFIG as CHART_CONFIG, agent_chart
@@ -91,6 +93,7 @@ def _init_state():
     ss.setdefault("clean_log", None)       # change log of the cleaning currently in use
     ss.setdefault("query_log", [])         # every question this session (kept when the chat is cleared)
     ss.setdefault("pdf", None)             # (key, bytes) of the last generated report
+    ss.setdefault("inflight", None)        # question being answered in the background
 
 
 _init_state()
@@ -123,6 +126,7 @@ def _load(file_obj_or_path, name: str, ftype: str | None, size: int | None = Non
     ss.clean_log = None
     ss.query_log = []
     ss.pdf = None
+    ss.inflight = None
 
 
 def _activate_dataframe(frame: pd.DataFrame):
@@ -138,7 +142,7 @@ def _activate_dataframe(frame: pd.DataFrame):
     ss.df = frame
     ss.profile = profiling.build_profile(frame, ss.profile.file_bytes if ss.profile else None)
     # answers about the old data would be misleading now
-    ss.chat, ss.history = [], []
+    ss.chat, ss.history, ss.inflight = [], [], None
 
 
 def _load_sample(key: str):
@@ -620,19 +624,78 @@ def _answer_cache() -> AnswerCache:
     return AnswerCache(ttl=600, max_entries=200)
 
 
-def _get_answer(question, progress):
-    key = (question, ss.db_path, ss.schema_text, os.environ.get("LLM_PROVIDER"),
-           json.dumps(ss.history, default=str))
-    res, cached = _answer_cache().get_or_compute(
-        key,
-        lambda: answer_question(question, db_path=ss.db_path, schema_text=ss.schema_text,
-                                provider=os.environ.get("LLM_PROVIDER"), history=ss.history,
-                                progress=progress),
-        should_cache=lambda r: not r.error,   # failed answers are never cached
-    )
-    if cached:
-        log.info("answer served from cache")
-    return res
+@st.cache_resource
+def _workers() -> ThreadPoolExecutor:
+    """Background threads for AI answers. An answer keeps running even if the page
+    reruns (a click or a new question), which would otherwise kill it mid-way."""
+    return ThreadPoolExecutor(max_workers=8, thread_name_prefix="aib-answer")
+
+
+def _submit_question(question: str):
+    """Start answering in the background; progress events go into a queue."""
+    events: queue.Queue = queue.Queue()
+    # capture plain values now: worker threads can't read st.session_state
+    db_path, schema_text, history = ss.db_path, ss.schema_text, list(ss.history)
+    provider = os.environ.get("LLM_PROVIDER")
+    key = (question, db_path, schema_text, provider, json.dumps(history, default=str))
+
+    def work():
+        try:
+            res, cached = _answer_cache().get_or_compute(
+                key,
+                lambda: answer_question(question, db_path=db_path, schema_text=schema_text,
+                                        provider=provider, history=history,
+                                        progress=lambda e, d: events.put((e, d))),
+                should_cache=lambda r: not r.error,   # failed answers are never cached
+            )
+            if cached:
+                log.info("answer served from cache")
+            return res
+        except Exception as e:  # last-resort guard so the question never vanishes
+            log.exception("answer_question crashed")
+            return AgentResult(answer="Something went wrong while analysing. Please try again.",
+                               error=str(e))
+
+    ss.inflight = {"q": question, "future": _workers().submit(work), "events": events}
+    log.info("new question: %r (chat turns=%d)", question[:120], len(ss.chat))
+
+
+def _finish_inflight():
+    """Move a finished background answer into the chat, history and query log."""
+    job = ss.inflight
+    ss.inflight = None
+    question, res = job["q"], job["future"].result()
+    log.info("saved answer: error=%s answer_len=%d charts=%d", res.error, len(res.answer or ""), len(res.charts))
+    ss.chat.append({"q": question, "result": res})
+    ss.query_log.append({"time": time.strftime("%H:%M:%S", time.gmtime()), "question": question,
+                         "status": "error" if res.error else "answered",
+                         "sql": res.sql_queries, "charts": len(res.charts),
+                         "answer": (res.answer or "")[:300]})
+    ss.history.append({"role": "user", "content": question})
+    ss.history.append({"role": "assistant", "content": _history_entry(res)})
+    ss.history = ss.history[-12:]
+
+
+def _wait_for_inflight():
+    """Show the running question with live progress until its answer is ready."""
+    job = ss.inflight
+    with st.chat_message("user"):
+        st.markdown(job["q"])
+    with st.chat_message("assistant"):
+        status = st.status("Understanding the question…", expanded=True)
+        show = _Progress(status)
+        while True:
+            try:
+                while True:
+                    show(*job["events"].get_nowait())
+            except queue.Empty:
+                pass
+            if job["future"].done():
+                break
+            time.sleep(0.25)
+        failed = bool(job["future"].result().error)
+        status.update(label="Couldn't complete the analysis" if failed else "Analysis complete",
+                      state="error" if failed else "complete", expanded=False)
 
 
 def _clean_answer(answer: str) -> str:
@@ -778,7 +841,11 @@ def _history_entry(res) -> str:
 
 
 def render_analyst():
-    if ss.chat:
+    typed = st.chat_input("Ask about your data…")
+    if typed:
+        # queue it; if an answer is still running, this one starts right after
+        ss.pending_q = typed
+    if ss.chat or ss.inflight is not None:
         c1, c2 = st.columns([4, 1])
         with c1:
             st.caption(f"{len(ss.chat)} question(s) in this conversation · "
@@ -794,7 +861,9 @@ def render_analyst():
         with st.chat_message("assistant"):
             _render_result(turn["result"], key=str(i))
 
-    if not ss.chat:
+    if ss.inflight is not None and ss.pending_q:
+        st.caption(f"Next in line: “{ss.pending_q}”")
+    if not ss.chat and ss.inflight is None:
         st.markdown(ui.section_html("Ask a question",
                                     "In English or Hindi. Follow-up questions remember the conversation."),
                     unsafe_allow_html=True)
@@ -805,13 +874,15 @@ def render_analyst():
                     ss.pending_q = eq
                     st.rerun()
 
-    typed = st.chat_input("Ask about your data…")
-    question = typed or ss.pending_q
+    if ss.inflight is not None:
+        _wait_for_inflight()          # blocks (with live progress) until the answer is ready
+        _finish_inflight()
+        st.rerun()                    # redraw: answer in the chat, meters updated
+
+    question = ss.pending_q
     ss.pending_q = None
     if not question:
         return
-    log.info("new question: %r (chat turns=%d)", question[:120], len(ss.chat))
-
     if ss.n_questions >= MAX_SESSION_QUESTIONS:
         st.warning("Question limit reached for this session. Reload the page to start a new session.",
                    icon=":material/block:")
@@ -819,36 +890,14 @@ def render_analyst():
     if usage.daily_limit_reached():
         st.warning("Daily question limit reached — please try again tomorrow.", icon=":material/block:")
         return
-
-    with st.chat_message("user"):
-        st.markdown(question)
-    with st.chat_message("assistant"):
-        status = st.status("Understanding the question…", expanded=True)
-        try:
-            res = _get_answer(question, _Progress(status))
-        except Exception as e:  # last-resort guard so the question never vanishes
-            log.exception("answer_question crashed")
-            res = AgentResult(answer="Something went wrong while analysing. Please try again.",
-                              error=str(e))
-        status.update(label="Couldn't complete the analysis" if res.error else "Analysis complete",
-                      state="error" if res.error else "complete", expanded=False)
-        log.info("rendering answer: error=%s answer_len=%d charts=%d", res.error,
-                 len(res.answer or ""), len(res.charts))
-        _render_result(res)
-
     ss.n_questions += 1
     usage.increment()
-    ss.chat.append({"q": question, "result": res})
-    ss.query_log.append({"time": time.strftime("%H:%M:%S", time.gmtime()), "question": question,
-                         "status": "error" if res.error else "answered",
-                         "sql": res.sql_queries, "charts": len(res.charts),
-                         "answer": (res.answer or "")[:300]})
-    ss.history.append({"role": "user", "content": question})
-    ss.history.append({"role": "assistant", "content": _history_entry(res)})
-    ss.history = ss.history[-12:]
-    log.info("saved to chat (now %d turns); rerunning", len(ss.chat))
-    st.rerun()   # refresh sidebar meters + collapse example chips
+    _submit_question(question)
+    st.rerun()
 
+# An answer that finished while the user was on another section joins the chat now.
+if ss.inflight is not None and ss.inflight["future"].done() and nav != "AI Analyst":
+    _finish_inflight()
 
 if nav == "Overview":
     render_overview()
