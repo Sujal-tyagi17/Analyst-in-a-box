@@ -111,34 +111,11 @@ with st.sidebar:
             except Exception as e:
                 st.error(f"Load failed: {e}")
 
-    st.divider()
-    st.markdown('<div class="side-label">2 · Model</div>', unsafe_allow_html=True)
-    # groq & gemini have generous FREE tiers (no credit card) and support tool calling
-    PROVIDER_KEY = {
-        "groq": "GROQ_API_KEY", "gemini": "GEMINI_API_KEY",
-        "anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY",
-    }
-    PROVIDER_LABEL = {
-        "groq": "Groq · Llama 3.3 (free)", "gemini": "Google Gemini (free)",
-        "anthropic": "Anthropic Claude (paid)", "openai": "OpenAI GPT (paid)",
-    }
-    _opts = list(PROVIDER_KEY)
-    _default = os.environ.get("LLM_PROVIDER", "groq")
-    provider = st.selectbox(
-        "LLM provider", _opts,
-        index=_opts.index(_default) if _default in _opts else 0,
-        format_func=lambda p: PROVIDER_LABEL[p],
-        label_visibility="collapsed",
-    )
-    os.environ["LLM_PROVIDER"] = provider
-    key_env = PROVIDER_KEY[provider]
-    if not os.environ.get(key_env):
-        st.warning(f"{key_env} not set — add it in Secrets.", icon="🔑")
-    else:
-        st.caption(f"🟢 {provider} key detected")
-    if provider in ("groq", "gemini"):
-        _url = "console.groq.com/keys" if provider == "groq" else "aistudio.google.com/apikey"
-        st.caption(f"💡 Free key → {_url}")
+    # Provider + fallback order come from Secrets (LLM_PROVIDER / LLM_FALLBACK).
+    # Only warn when no key is configured at all, so a broken deploy is obvious.
+    if not any(os.environ.get(k) for k in
+               ("GROQ_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY")):
+        st.warning("No AI API key configured — add GROQ_API_KEY in Secrets.", icon="🔑")
 
     st.divider()
     st.markdown(ui.meter_html(st.session_state.n_questions, MAX_SESSION_QUESTIONS,
