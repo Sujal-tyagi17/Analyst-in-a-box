@@ -221,8 +221,8 @@ def run_analysis(data: Any, method: str, **kwargs: Any) -> dict[str, Any]:
         x = np.arange(len(y))
         X = sm.add_constant(x)
         model = sm.OLS(y, X).fit()
-        slope = float(model.params[1])
-        p_val = float(model.pvalues[1])
+        slope = float(model.params.iloc[1])
+        p_val = float(model.pvalues.iloc[1])
         direction = "increasing" if slope > 0 else "decreasing" if slope < 0 else "flat"
         sig = "statistically significant" if p_val < 0.05 else "not statistically significant"
         return {

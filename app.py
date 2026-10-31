@@ -198,6 +198,8 @@ def _render_result(res):
         st.caption(f"↪️ {res.fallback_note}")
     if res.error:
         st.error(res.answer)
+    elif not (res.answer or "").strip():
+        st.warning("The model returned an empty answer. Please try asking again.", icon="⚠️")
     else:
         st.markdown(f'<div class="insight">{res.answer}</div>', unsafe_allow_html=True)
 

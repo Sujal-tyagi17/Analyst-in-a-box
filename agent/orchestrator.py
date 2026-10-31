@@ -341,7 +341,21 @@ def _run_openai_compatible(system: str, question: str, runner: _ToolRunner,
         messages.append(msg.model_dump(exclude_none=True))
 
         if not msg.tool_calls:
-            return (msg.content or "").strip()
+            answer = (msg.content or "").strip()
+            if answer:
+                return answer
+            # Some providers (notably Gemini) occasionally end with an empty
+            # message after tool calls. Ask once more for the written answer.
+            messages.append({
+                "role": "user",
+                "content": "Using the tool results above, write the final answer "
+                           "for the user now, in plain language. Do not call any tools.",
+            })
+            resp = client.chat.completions.create(model=model, messages=messages)
+            answer = (resp.choices[0].message.content or "").strip()
+            if answer:
+                return answer
+            raise RuntimeError(f"{model} returned an empty answer")
 
         for tc in msg.tool_calls:
             args = json.loads(tc.function.arguments or "{}")
