@@ -38,7 +38,8 @@ except Exception:
 import pandas as pd
 from agent import schema_reader, usage, ui
 from agent.orchestrator import answer_question, AgentResult, log
-from analytics import profiling
+from analytics import cleaning, eda, profiling
+from analytics.charts import CONFIG as CHART_CONFIG
 
 MAX_SESSION_QUESTIONS = int(os.environ.get("MAX_SESSION_QUESTIONS", "15"))
 MAX_UPLOAD_MB = 200
@@ -61,6 +62,7 @@ SECTIONS = {
     "Overview": ":material/dashboard:",
     "AI Analyst": ":material/forum:",
     "Data Explorer": ":material/table_view:",
+    "Analytics": ":material/insights:",
 }
 
 st.set_page_config(page_title="Analyst-in-a-Box", page_icon="📊", layout="wide")
@@ -87,6 +89,8 @@ def _init_state():
     ss.setdefault("n_questions", 0)
     ss.setdefault("pending_q", None)     # queued question from example chips
     ss.setdefault("nav", "Overview")
+    ss.setdefault("original", None)        # snapshot of the uploaded data while cleaned data is active
+    ss.setdefault("clean_preview", None)   # cleaning.CleaningResult awaiting the user's decision
 
 
 _init_state()
@@ -114,6 +118,24 @@ def _load(file_obj_or_path, name: str, ftype: str | None, size: int | None = Non
     ss.history = []
     ss.n_questions = 0
     ss.nav = "Overview"
+    ss.original = None
+    ss.clean_preview = None
+
+
+def _activate_dataframe(frame: pd.DataFrame):
+    """Make `frame` the dataset the AI and dashboard use (a new SQLite DB; the old one is kept)."""
+    db_path = os.path.join(tempfile.mkdtemp(prefix="aib_"), "dataset.db")
+    table = ss.schema.tables[0].name
+    from sqlalchemy import create_engine
+    engine = create_engine(f"sqlite:///{db_path}")
+    frame.to_sql(table, engine, if_exists="replace", index=False)
+    engine.dispose()
+    schema = schema_reader.introspect(db_path)
+    ss.db_path, ss.schema, ss.schema_text = db_path, schema, schema.to_prompt_text()
+    ss.df = frame
+    ss.profile = profiling.build_profile(frame, ss.profile.file_bytes if ss.profile else None)
+    # answers about the old data would be misleading now
+    ss.chat, ss.history = [], []
 
 
 def _load_sample(key: str):
@@ -285,11 +307,26 @@ def _fmt_value(v) -> str:
 # Data Explorer
 # ---------------------------------------------------------------------------
 def render_explorer():
+    if ss.original is not None:
+        st.info("You are analysing the **cleaned** data. The original upload is unchanged; "
+                "restore it under **Data quality & cleaning**.", icon=":material/cleaning_services:")
+    t_prev, t_cols, t_clean = st.tabs(["Preview", "Columns", "Data quality & cleaning"])
+    with t_prev:
+        render_preview()
+    with t_cols:
+        render_columns()
+    with t_clean:
+        render_cleaning()
+
+
+def render_preview():
     st.markdown(ui.section_html("Data preview", f"First {min(len(df), 1000):,} of {len(df):,} rows"),
                 unsafe_allow_html=True)
-    st.dataframe(df.head(1000), use_container_width=True, hide_index=True, height=360,
+    st.dataframe(df.head(1000), use_container_width=True, hide_index=True, height=420,
                  column_config=_date_column_config(df))
 
+
+def render_columns():
     st.markdown(ui.section_html("Column details",
                                 f"Table `{table.name}` as the AI sees it, with the detected role of each column"),
                 unsafe_allow_html=True)
@@ -307,6 +344,203 @@ def render_explorer():
     st.dataframe(info, use_container_width=True, hide_index=True,
                  column_config={"Missing %": st.column_config.ProgressColumn(
                      "Missing %", min_value=0, max_value=100, format="%.1f%%")})
+
+
+def render_cleaning():
+    base = ss.original["df"] if ss.original is not None else df
+    report = cleaning.quality_report(base)
+    dups = int(base.duplicated().sum())
+    n_issue_cols = int((report["Issues"] != "None found").sum())
+    st.markdown(ui.kpi_cards([
+        {"value": f"{int(base.isna().sum().sum()):,}", "label": "Missing values",
+         "tone": "warn" if base.isna().any().any() else ""},
+        {"value": f"{dups:,}", "label": "Duplicate rows", "tone": "warn" if dups else ""},
+        {"value": n_issue_cols, "label": "Columns with issues", "tone": "warn" if n_issue_cols else ""},
+    ]), unsafe_allow_html=True)
+    st.markdown(ui.section_html("Column-wise data quality",
+                                "Checks for missing values, wrong types, inconsistent text and outliers (IQR rule)"),
+                unsafe_allow_html=True)
+    st.dataframe(report, use_container_width=True, hide_index=True,
+                 column_config={"Missing %": st.column_config.ProgressColumn(
+                     "Missing %", min_value=0, max_value=100, format="%.1f%%"),
+                     "Issues": st.column_config.TextColumn("Issues", width="large")})
+
+    if ss.original is not None:
+        st.success("Cleaned data is in use for the dashboard, analytics and AI answers.",
+                   icon=":material/check_circle:")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Restore original data", icon=":material/undo:", use_container_width=True):
+                orig = ss.original
+                ss.db_path, ss.schema, ss.schema_text = orig["db_path"], orig["schema"], orig["schema_text"]
+                ss.df, ss.profile = orig["df"], orig["profile"]
+                ss.original, ss.clean_preview = None, None
+                ss.chat, ss.history = [], []
+                st.rerun()
+        with c2:
+            _download_csv(df, f"{ss.dataset_name}_cleaned.csv", "Download cleaned CSV")
+        return
+
+    st.markdown(ui.section_html("Clean the data",
+                                "Choose the operations, preview the result, then decide whether to use it. "
+                                "The original upload is never changed."),
+                unsafe_allow_html=True)
+    with st.form("clean_form", border=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            o_dup = st.checkbox("Remove duplicate rows", value=True)
+            o_ws = st.checkbox("Trim extra spaces in text", value=True)
+            o_case = st.checkbox("Unify inconsistent spellings (e.g. north / North)", value=True)
+            o_types = st.checkbox("Convert numbers and dates stored as text", value=True)
+            o_empty = st.checkbox("Remove completely empty columns", value=True)
+        with c2:
+            o_miss = st.radio("Missing values", ["keep", "fill", "drop_rows"], horizontal=False,
+                              format_func={"keep": "Keep as missing",
+                                           "fill": "Fill (median for numbers, most common value for text)",
+                                           "drop_rows": "Remove rows with any missing value"}.get)
+            o_out = st.radio("Outliers (IQR rule)", ["keep", "cap", "remove"],
+                             format_func={"keep": "Keep", "cap": "Cap to the IQR bounds",
+                                          "remove": "Remove those rows"}.get)
+        preview = st.form_submit_button("Preview cleaning", icon=":material/visibility:", type="primary")
+    if preview:
+        ss.clean_preview = cleaning.apply_cleaning(base, cleaning.CleaningOptions(
+            remove_duplicates=o_dup, trim_whitespace=o_ws, fix_case_variants=o_case,
+            convert_types=o_types, drop_empty_columns=o_empty, missing=o_miss, outliers=o_out))
+
+    res: cleaning.CleaningResult | None = ss.clean_preview
+    if res is None:
+        return
+    if not res.changed:
+        st.info("With these options there is nothing to change: the data is already clean.",
+                icon=":material/check_circle:")
+        return
+    st.markdown(ui.section_html("Preview of the changes"), unsafe_allow_html=True)
+    st.markdown(ui.kpi_cards([
+        {"value": f"{res.rows_before:,} → {res.rows_after:,}", "label": "Rows"},
+        {"value": f"{res.missing_before:,} → {res.missing_after:,}", "label": "Missing values"},
+        {"value": f"{base.shape[1]} → {res.data.shape[1]}", "label": "Columns"},
+    ]), unsafe_allow_html=True)
+    st.markdown("\n".join(f"- {c}" for c in res.changes))
+    st.dataframe(res.data.head(200), use_container_width=True, hide_index=True, height=260,
+                 column_config=_date_column_config(res.data))
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Use cleaned data for analysis", icon=":material/check:", type="primary",
+                     use_container_width=True):
+            ss.original = {"db_path": ss.db_path, "schema": ss.schema, "schema_text": ss.schema_text,
+                           "df": df, "profile": ss.profile}
+            _activate_dataframe(res.data)
+            ss.clean_preview = None
+            st.toast("Now using the cleaned data. The chat was cleared.", icon=":material/check_circle:")
+            st.rerun()
+    with c2:
+        _download_csv(res.data, f"{ss.dataset_name}_cleaned.csv", "Download cleaned CSV")
+
+
+def _download_csv(frame: pd.DataFrame, filename: str, label: str):
+    st.download_button(label, frame.to_csv(index=False).encode("utf-8"), file_name=filename,
+                       mime="text/csv", icon=":material/download:", use_container_width=True)
+
+
+# ---------------------------------------------------------------------------
+# Analytics (automated EDA)
+# ---------------------------------------------------------------------------
+def _plot(fig):
+    if fig is not None:
+        st.plotly_chart(fig, use_container_width=True, theme=None, config=CHART_CONFIG)
+
+
+def render_analytics():
+    kinds = prof.kinds
+    nums = eda.numeric_columns(df, kinds)
+    cats = eda.categorical_columns(df, kinds)
+    dates = eda.datetime_columns(kinds)
+    if not nums and not cats:
+        st.info("This dataset has no numeric or categorical columns to analyse.", icon=":material/info:")
+        return
+
+    if nums:
+        st.markdown(ui.section_html("Descriptive statistics",
+                                    "Mean, median, spread and quartiles of every numeric column"),
+                    unsafe_allow_html=True)
+        desc = eda.describe_numeric(df, nums)
+        fmt = {c: st.column_config.NumberColumn(c, format="%.2f")
+               for c in ["Mean", "Median", "Std dev", "Min", "Q1 (25%)", "Q3 (75%)", "Max", "Skew"]}
+        st.dataframe(desc, use_container_width=True, hide_index=True, column_config=fmt)
+
+        st.markdown(ui.section_html("Distributions", "How the values of one numeric column are spread"),
+                    unsafe_allow_html=True)
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            col = st.selectbox("Numeric column", nums, key="eda_num",
+                               index=nums.index(profiling.primary_measure(df, kinds))
+                               if profiling.primary_measure(df, kinds) in nums else 0)
+        with c2:
+            by = st.selectbox("Compare across", ["(none)"] + [c for c in cats if df[c].nunique() <= 20],
+                              key="eda_by")
+        g1, g2 = st.columns(2)
+        with g1:
+            _plot(eda.histogram(df, col))
+        with g2:
+            _plot(eda.box_plot(df, col, None if by == "(none)" else by))
+
+    if cats:
+        st.markdown(ui.section_html("Categorical columns", "How often each value appears"),
+                    unsafe_allow_html=True)
+        default_cat = profiling.primary_category(df, kinds)
+        ccol = st.selectbox("Categorical column", cats, key="eda_cat",
+                            index=cats.index(default_cat) if default_cat in cats else 0)
+        freq = eda.category_frequencies(df, ccol)
+        g1, g2 = st.columns([3, 2])
+        with g1:
+            _plot(eda.frequency_bar(freq, ccol))
+        with g2:
+            st.dataframe(freq.assign(Share=freq["Share"] * 100), use_container_width=True,
+                         hide_index=True, column_config={"Share": st.column_config.ProgressColumn(
+                             "Share", min_value=0, max_value=100, format="%.1f%%")})
+
+    if len(nums) >= 2:
+        st.markdown(ui.section_html("Relationships between numeric columns",
+                                    "Pearson correlation: +1 moves together, −1 moves opposite, 0 no linear link"),
+                    unsafe_allow_html=True)
+        g1, g2 = st.columns([3, 2])
+        with g1:
+            _plot(eda.correlation_heatmap(df, nums))
+        with g2:
+            pairs = eda.strongest_pairs(df, nums)
+            st.caption("Strongest pairs")
+            st.dataframe(pairs, use_container_width=True, hide_index=True,
+                         column_config={"r": st.column_config.NumberColumn("r", format="%.2f")})
+        top = pairs.iloc[0] if len(pairs) else None
+        c1, c2 = st.columns(2)
+        with c1:
+            x = st.selectbox("X axis", nums, key="eda_x",
+                             index=nums.index(top["Column A"]) if top is not None else 0)
+        with c2:
+            y_opts = [c for c in nums if c != x]
+            y_default = top["Column B"] if top is not None and top["Column B"] in y_opts else y_opts[0]
+            y = st.selectbox("Y axis", y_opts, key="eda_y", index=y_opts.index(y_default)
+                             if y_default in y_opts else 0)
+        _plot(eda.scatter(df, x, y))
+
+    if dates and nums:
+        st.markdown(ui.section_html("Trend over time"), unsafe_allow_html=True)
+        c1, c2 = st.columns(2)
+        with c1:
+            dcol = st.selectbox("Date column", dates, key="eda_date")
+        with c2:
+            pm = profiling.primary_measure(df, kinds)
+            vcol = st.selectbox("Value", nums, key="eda_val", index=nums.index(pm) if pm in nums else 0)
+        _plot(eda.time_trend(df, dcol, vcol))
+
+    if nums:
+        st.markdown(ui.section_html("Outliers", "Values below Q1 − 1.5×IQR or above Q3 + 1.5×IQR"),
+                    unsafe_allow_html=True)
+        outl = eda.outlier_table(df, nums)
+        st.dataframe(outl.assign(Share=outl["Share"] * 100), use_container_width=True, hide_index=True,
+                     column_config={"Share": st.column_config.NumberColumn("Share", format="%.1f%%"),
+                                    "Lower bound": st.column_config.NumberColumn(format="%.2f"),
+                                    "Upper bound": st.column_config.NumberColumn(format="%.2f")})
 
 
 # ---------------------------------------------------------------------------
@@ -440,3 +674,5 @@ elif nav == "AI Analyst":
     render_analyst()
 elif nav == "Data Explorer":
     render_explorer()
+elif nav == "Analytics":
+    render_analytics()

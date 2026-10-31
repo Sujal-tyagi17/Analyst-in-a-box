@@ -269,7 +269,7 @@ def auto_insights(df: pd.DataFrame, kinds: dict[str, str], limit: int = 5) -> li
                          f"{miss.iloc[0] / len(df):.0%})")
         if dups:
             parts.append(f"{dups} duplicate row(s)")
-        out.append("Data quality: " + "; ".join(parts) + ". See the Data Explorer tab for details.")
+        out.append("Data quality: " + "; ".join(parts) + ". See Data Explorer → Data quality & cleaning.")
     return out[:limit]
 
 
