@@ -197,12 +197,14 @@ def _render_result(res):
     if getattr(res, "fallback_note", None):
         st.caption(f"↪️ {res.fallback_note}")
     if res.error:
-        st.error(res.answer)
+        st.error(res.answer.replace("$", "\\$"))
     elif not (res.answer or "").strip():
         st.warning("The model returned an empty answer. Please try asking again.", icon="⚠️")
     else:
         # blank lines let Markdown (bold, lists) render inside the styled box
-        st.markdown(f'<div class="insight">\n\n{res.answer}\n\n</div>', unsafe_allow_html=True)
+        # escape "$" so Streamlit doesn't treat "$...$" as a LaTeX math formula
+        safe = res.answer.replace("$", "\\$")
+        st.markdown(f'<div class="insight">\n\n{safe}\n\n</div>', unsafe_allow_html=True)
 
 
 for turn in st.session_state.chat:
