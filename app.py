@@ -701,6 +701,7 @@ def _wait_for_inflight():
 def _clean_answer(answer: str) -> str:
     # charts are rendered separately; drop any image markdown the model adds
     answer = re.sub(r"!\[[^\]]*\](\([^)]*\))?", "", answer).strip()
+    answer = ui.fix_bold_markers(answer)
     # The model sometimes guesses a currency for unlabeled money columns; drop
     # the symbol unless the dataset's schema actually mentions that currency.
     schema_txt = (ss.get("schema_text") or "").lower()

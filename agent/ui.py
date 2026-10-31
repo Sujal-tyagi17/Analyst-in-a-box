@@ -212,3 +212,28 @@ def meter_html(used: int, total: int, label: str) -> str:
         f'<div class="meter"><span style="width:{pct}%"></span></div>'
         f'<div class="meter-txt"><span>{used} used</span><span>{total} max</span></div>'
     )
+
+
+def fix_bold_markers(text: str) -> str:
+    """Repair the model's broken bold Markdown so no stray '**' shows up.
+
+    Handles, per line: nested bold ('**A **B** C**' -> '**A B C**') and an
+    unmatched marker ('**Total peaked at **42** in June.' -> 'Total peaked at **42** in June.').
+    """
+    out = []
+    for line in text.split("\n"):
+        n = line.count("**")
+        stripped = line.strip()
+        if n >= 4 and stripped.startswith("**") and stripped.endswith("**"):
+            inner = stripped[2:-2].replace("**", "")
+            line = line[: len(line) - len(line.lstrip())] + f"**{inner}**"
+        elif n % 2 == 1:
+            i = line.find("**")
+            # drop the marker that has no partner: a leading one, otherwise the last one
+            if stripped.startswith("**"):
+                line = line[:i] + line[i + 2:]
+            else:
+                j = line.rfind("**")
+                line = line[:j] + line[j + 2:]
+        out.append(line)
+    return "\n".join(out)

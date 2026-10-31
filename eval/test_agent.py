@@ -150,3 +150,26 @@ def test_cache_expiry():
     c.get_or_compute("k", lambda: 1)
     time.sleep(0.08)
     assert c.get_or_compute("k", lambda: 2) == (2, False)
+
+
+# ---------------------------------------------------------------- answer formatting
+
+from agent.ui import fix_bold_markers  # noqa: E402
+
+
+@pytest.mark.parametrize("raw, fixed", [
+    ("**Total revenue peaked at **429,437** in June 2026.",
+     "Total revenue peaked at **429,437** in June 2026."),
+    ("**The South region leads with **985,602** revenue.**",
+     "**The South region leads with 985,602 revenue.**"),
+    ("- June: **429,437** (highest)", "- June: **429,437** (highest)"),
+    ("Revenue was **429,437** and **177,917", "Revenue was **429,437** and 177,917"),
+    ("plain text", "plain text"),
+])
+def test_fix_bold_markers(raw, fixed):
+    assert fix_bold_markers(raw) == fixed
+
+
+def test_prompt_has_trend_and_seasonality_rules():
+    from agent.prompts import SYSTEM_PROMPT
+    assert "Mention the dips" in SYSTEM_PROMPT and "Seasonality" in SYSTEM_PROMPT
