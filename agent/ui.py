@@ -1,171 +1,214 @@
-"""ui.py — presentation layer (CSS + reusable HTML components) for the app.
+"""ui.py — presentation layer (CSS + small HTML components) for the app.
 
 Kept separate from app logic so app.py stays readable. Nothing here is
-dataset-specific.
+dataset-specific; every value passed in is escaped before it is rendered.
 """
 
 from __future__ import annotations
 
+import html
+import re
+
 CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 :root{
-  --violet:#7C5CFF; --cyan:#22D3EE; --pink:#F472B6;
-  --bg:#0B0E14; --card:#141922; --card-2:#1A2130;
-  --border:#232A3A; --text:#E6E9EF; --muted:#8B94A7;
-  --grad:linear-gradient(120deg,#7C5CFF 0%,#22D3EE 100%);
+  --violet:#7C5CFF; --blue:#4F8BFF; --cyan:#22D3EE;
+  --bg:#0B0E14; --card:#121722; --card-2:#171E2B; --card-3:#1C2433;
+  --border:#232B3B; --border-2:#2C3548;
+  --text:#E6E9EF; --muted:#8B94A7; --faint:#5F6880;
+  --good:#34D399; --warn:#FBBF24; --bad:#F87171;
+  --grad:linear-gradient(120deg,#7C5CFF 0%,#4F8BFF 55%,#22D3EE 100%);
+  --radius:14px;
 }
 
-html, body, [class*="css"]{ font-family:'Inter',sans-serif; }
+html, body, [class*="css"], .stMarkdown, button, input, textarea{ font-family:'Inter',sans-serif; }
 .stApp{ background:
-    radial-gradient(1100px 500px at 12% -8%, rgba(124,92,255,.16), transparent 60%),
-    radial-gradient(900px 500px at 100% 0%, rgba(34,211,238,.12), transparent 55%),
+    radial-gradient(1000px 420px at 10% -10%, rgba(124,92,255,.13), transparent 60%),
+    radial-gradient(800px 420px at 100% -5%, rgba(79,139,255,.10), transparent 55%),
     var(--bg); }
 
 /* hide default chrome */
-#MainMenu, header[data-testid="stHeader"], footer{ visibility:hidden; height:0; }
+#MainMenu, footer{ visibility:hidden; height:0; }
+header[data-testid="stHeader"]{ background:transparent; }
 [data-testid="stToolbar"]{ display:none; }
-.block-container{ padding-top:2.2rem; padding-bottom:6rem; max-width:1150px; }
+.block-container{ padding-top:1.6rem; padding-bottom:6rem; max-width:1200px; }
 
-/* ---------- hero ---------- */
-.hero{ margin:.2rem 0 1.4rem; }
-.hero h1{
-  font-size:2.55rem; font-weight:800; letter-spacing:-.02em; margin:0;
-  background:var(--grad); -webkit-background-clip:text; background-clip:text;
-  -webkit-text-fill-color:transparent; line-height:1.1;
-}
-.hero p{ color:var(--muted); font-size:1.05rem; margin:.5rem 0 0; max-width:680px; }
-.chiprow{ display:flex; gap:.5rem; flex-wrap:wrap; margin-top:1rem; }
-.chip{
-  font-size:.78rem; font-weight:600; color:#cbd3e1;
-  background:rgba(124,92,255,.10); border:1px solid var(--border);
-  padding:.34rem .7rem; border-radius:999px; backdrop-filter:blur(6px);
-}
-.chip b{ color:var(--cyan); }
+h1,h2,h3,h4{ letter-spacing:-.01em; }
 
-/* ---------- cards ---------- */
-.card{
-  background:linear-gradient(180deg, rgba(26,33,48,.85), rgba(20,25,34,.85));
-  border:1px solid var(--border); border-radius:18px; padding:1.15rem 1.25rem;
-  box-shadow:0 10px 30px rgba(0,0,0,.25);
-}
-.welcome{ text-align:center; padding:2.6rem 1.5rem; }
-.welcome .big{ font-size:1.35rem; font-weight:700; color:var(--text); }
-.welcome .sub{ color:var(--muted); margin-top:.4rem; }
-
-/* metric badges */
-.metricrow{ display:flex; gap:.8rem; flex-wrap:wrap; margin:.2rem 0 1rem; }
-.metric{
-  flex:1; min-width:120px; background:var(--card); border:1px solid var(--border);
-  border-radius:14px; padding:.8rem 1rem;
-}
-.metric .v{ font-size:1.5rem; font-weight:800; color:var(--text);
-  font-family:'JetBrains Mono',monospace; }
-.metric .k{ font-size:.72rem; color:var(--muted); text-transform:uppercase;
-  letter-spacing:.06em; margin-top:.15rem; }
-.metric.accent .v{ background:var(--grad); -webkit-background-clip:text;
-  background-clip:text; -webkit-text-fill-color:transparent; }
-
-/* ---------- sidebar ---------- */
-[data-testid="stSidebar"]{
-  background:linear-gradient(180deg,#0E1320, #0B0E14);
-  border-right:1px solid var(--border);
-}
-[data-testid="stSidebar"] .brand{
-  font-weight:800; font-size:1.15rem; display:flex; align-items:center; gap:.5rem;
+/* ---------- header / hero ---------- */
+.hero{ margin:.2rem 0 1.2rem; }
+.hero .title{
+  font-size:2.3rem; font-weight:800; letter-spacing:-.025em; margin:0; line-height:1.1;
   background:var(--grad); -webkit-background-clip:text; background-clip:text;
   -webkit-text-fill-color:transparent;
 }
-.side-label{ font-size:.72rem; font-weight:700; letter-spacing:.08em;
-  text-transform:uppercase; color:var(--muted); margin:.4rem 0 .3rem; }
+.hero p{ color:var(--muted); font-size:1.02rem; margin:.55rem 0 0; max-width:700px; line-height:1.55; }
+.chiprow{ display:flex; gap:.45rem; flex-wrap:wrap; margin-top:.9rem; }
+.chip{ font-size:.76rem; font-weight:600; color:#C9D1E0; background:rgba(124,92,255,.09);
+  border:1px solid var(--border); padding:.3rem .65rem; border-radius:999px; }
+.topbar{ display:flex; align-items:center; justify-content:space-between; gap:1rem;
+  flex-wrap:wrap; margin:.1rem 0 .9rem; }
+.topbar .title{ font-size:1.35rem; font-weight:800; letter-spacing:-.02em;
+  background:var(--grad); -webkit-background-clip:text; background-clip:text;
+  -webkit-text-fill-color:transparent; }
+.dsbadge{ font-size:.8rem; color:var(--muted); background:var(--card);
+  border:1px solid var(--border); padding:.35rem .75rem; border-radius:999px; }
+.dsbadge b{ color:var(--text); font-weight:600; }
 
-/* usage meter */
-.meter{ height:7px; background:#1e2636; border-radius:999px; overflow:hidden; margin:.35rem 0 .1rem; }
+/* ---------- section headers ---------- */
+.sec{ margin:1.3rem 0 .6rem; }
+.sec .h{ font-size:1.02rem; font-weight:700; color:var(--text); }
+.sec .s{ font-size:.84rem; color:var(--muted); margin-top:.15rem; }
+
+/* ---------- KPI + metric cards ---------- */
+.kpis{ display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:.7rem; margin:.2rem 0 .4rem; }
+.kpi{ background:var(--card); border:1px solid var(--border); border-radius:var(--radius);
+  padding:.85rem 1rem; }
+.kpi .v{ font-size:1.45rem; font-weight:700; color:var(--text); font-family:'JetBrains Mono',monospace;
+  letter-spacing:-.02em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.kpi .k{ font-size:.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:.07em; margin-top:.2rem; }
+.kpi .n{ font-size:.74rem; color:var(--faint); margin-top:.15rem; }
+.kpi.accent{ border-color:rgba(124,92,255,.45);
+  background:linear-gradient(160deg, rgba(124,92,255,.14), var(--card) 70%); }
+.kpi.warn .v{ color:var(--warn); }
+
+/* ---------- insight list ---------- */
+.insights{ background:var(--card); border:1px solid var(--border); border-radius:var(--radius);
+  padding:.4rem 1.1rem; }
+.insights .row{ display:flex; gap:.75rem; padding:.7rem 0; border-bottom:1px solid var(--border);
+  color:#CDD3DF; font-size:.92rem; line-height:1.5; }
+.insights .row:last-child{ border-bottom:none; }
+.insights .dot{ flex:0 0 8px; height:8px; margin-top:.5rem; border-radius:50%; background:var(--grad); }
+.insights b{ color:var(--text); }
+
+/* ---------- empty state ---------- */
+.empty{ text-align:center; padding:2.2rem 1.5rem 1rem; }
+.empty .big{ font-size:1.25rem; font-weight:700; color:var(--text); }
+.empty .sub{ color:var(--muted); margin-top:.4rem; font-size:.95rem; }
+
+/* ---------- sidebar ---------- */
+[data-testid="stSidebar"]{ background:linear-gradient(180deg,#0E1320,#0B0E14);
+  border-right:1px solid var(--border); }
+[data-testid="stSidebar"] .brand{ font-weight:800; font-size:1.12rem;
+  background:var(--grad); -webkit-background-clip:text; background-clip:text;
+  -webkit-text-fill-color:transparent; }
+.side-label{ font-size:.7rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--muted); margin:.5rem 0 .35rem; }
+.meter{ height:6px; background:#1E2636; border-radius:999px; overflow:hidden; margin:.3rem 0 .1rem; }
 .meter > span{ display:block; height:100%; background:var(--grad); border-radius:999px; }
-.meter-txt{ font-size:.72rem; color:var(--muted); display:flex; justify-content:space-between; }
+.meter-txt{ font-size:.7rem; color:var(--muted); display:flex; justify-content:space-between; }
 
-/* ---------- buttons ---------- */
-.stButton > button, [data-testid="stFormSubmitButton"] > button{
-  border-radius:12px; border:1px solid var(--border); font-weight:600;
-  background:var(--card-2); color:var(--text); transition:.15s ease;
-}
-.stButton > button:hover{ border-color:var(--violet);
-  box-shadow:0 0 0 3px rgba(124,92,255,.15); transform:translateY(-1px); }
-.stButton > button[kind="primary"]{
-  background:var(--grad); color:#0b0e14; border:none; font-weight:700;
-}
+/* ---------- widgets ---------- */
+.stButton > button, [data-testid="stDownloadButton"] > button{
+  border-radius:11px; border:1px solid var(--border-2); font-weight:600;
+  background:var(--card-2); color:var(--text); transition:border-color .15s ease, box-shadow .15s ease; }
+.stButton > button:hover, [data-testid="stDownloadButton"] > button:hover{
+  border-color:var(--violet); box-shadow:0 0 0 3px rgba(124,92,255,.14); color:var(--text); }
+.stButton > button[kind="primary"]{ background:var(--grad); color:#0B0E14; border:none; }
+[data-testid="stButtonGroup"]{ margin-bottom:.4rem; }
+[data-testid="stButtonGroup"] button{ font-weight:600; padding-left:.9rem; padding-right:.9rem; }
+[data-testid="stButtonGroup"] button [data-testid="stMarkdownContainer"] p{ display:flex; align-items:center; gap:.4rem; }
+[data-testid="stExpander"]{ border:1px solid var(--border); border-radius:var(--radius);
+  background:rgba(18,23,34,.6); }
+[data-testid="stDataFrame"]{ border:1px solid var(--border); border-radius:12px; }
+[data-testid="stFileUploaderDropzone"]{ background:var(--card); border:1px dashed var(--border-2); border-radius:12px; }
+code, pre, .stCode{ font-family:'JetBrains Mono',monospace!important; }
 
 /* ---------- chat ---------- */
-[data-testid="stChatMessage"]{
-  background:var(--card); border:1px solid var(--border);
-  border-radius:16px; padding:.4rem .3rem;
-}
+[data-testid="stChatMessage"]{ background:var(--card); border:1px solid var(--border);
+  border-radius:16px; padding:.5rem .4rem; }
 [data-testid="stChatMessageAvatarUser"]{ background:var(--violet)!important; }
-[data-testid="stChatMessageAvatarAssistant"]{ background:var(--cyan)!important; }
-[data-testid="stChatInput"] textarea{ font-size:1rem; }
+[data-testid="stChatMessageAvatarAssistant"]{ background:var(--blue)!important; }
 [data-testid="stChatInput"]{ border-radius:14px; }
+.insight{ border-left:3px solid var(--violet);
+  background:linear-gradient(90deg, rgba(124,92,255,.09), transparent);
+  padding:.7rem 1rem; border-radius:6px; margin-top:.3rem; }
 
-/* code / sql */
-code, pre, .stCode{ font-family:'JetBrains Mono',monospace!important; }
-[data-testid="stExpander"]{ border:1px solid var(--border); border-radius:14px;
-  background:rgba(20,25,34,.6); }
-
-/* dataframe polish */
-[data-testid="stDataFrame"]{ border:1px solid var(--border); border-radius:12px; }
-
-/* insight callout */
-.insight{
-  border-left:3px solid transparent; border-image:var(--grad) 1;
-  background:linear-gradient(90deg, rgba(124,92,255,.10), transparent);
-  padding:.7rem 1rem; border-radius:8px; margin-top:.3rem;
+/* ---------- mobile ---------- */
+@media (max-width: 640px){
+  .block-container{ padding-left:.9rem; padding-right:.9rem; padding-top:3.2rem; }
+  .hero .title{ font-size:1.75rem; }
+  .hero p{ font-size:.95rem; }
+  .kpis{ grid-template-columns:repeat(2,minmax(0,1fr)); gap:.5rem; }
+  .kpi{ padding:.7rem .8rem; }
+  .kpi .v{ font-size:1.15rem; }
+  .insights{ padding:.2rem .8rem; }
+  .topbar .title{ font-size:1.15rem; }
 }
 </style>
 """
+
+_BOLD = re.compile(r"\*\*(.+?)\*\*")
+
+
+def _md_bold(text: str) -> str:
+    """Escape text, then turn **x** into <b>x</b> (the only markup insights use)."""
+    return _BOLD.sub(r"<b>\1</b>", html.escape(text))
 
 
 def hero_html() -> str:
     return """
 <div class="hero">
-  <h1>📊 Analyst-in-a-Box</h1>
-  <p>Upload any dataset and ask questions in plain English or Hindi. It writes its
-     own SQL, runs the stats, draws the chart, and explains what it means — like a
-     junior data analyst that never sleeps.</p>
+  <div class="title">Analyst-in-a-Box</div>
+  <p>Upload a CSV or Excel file and ask questions in plain English or Hindi. It writes and
+     runs its own SQL, calculates the statistics, draws the chart and explains the result.</p>
   <div class="chiprow">
-    <span class="chip">🔎 Auto <b>schema</b></span>
-    <span class="chip">🧾 Writes <b>SQL</b></span>
-    <span class="chip">📈 <b>Stats</b> &amp; trends</span>
-    <span class="chip">📊 <b>Charts</b></span>
-    <span class="chip">💡 Plain-language <b>insight</b></span>
+    <span class="chip">Automatic schema</span><span class="chip">Natural language to SQL</span>
+    <span class="chip">Statistics</span><span class="chip">Charts</span>
+    <span class="chip">Plain-language insights</span>
   </div>
 </div>
 """
 
 
-def welcome_html() -> str:
+def topbar_html(dataset: str, rows: int, cols: int, size: str = "") -> str:
+    extra = f" · {html.escape(size)}" if size else ""
+    return (
+        '<div class="topbar"><div class="title">Analyst-in-a-Box</div>'
+        f'<div class="dsbadge">Dataset <b>{html.escape(dataset)}</b> · {rows:,} rows · {cols} columns{extra}</div></div>'
+    )
+
+
+def empty_state_html() -> str:
     return """
-<div class="card welcome">
-  <div class="big">👈 Load a dataset to begin</div>
-  <div class="sub">Pick a bundled sample or upload your own CSV / Excel from the sidebar.
-    The schema is detected automatically — no setup, no config.</div>
+<div class="empty">
+  <div class="big">Load a dataset to begin</div>
+  <div class="sub">Try a bundled sample below or upload your own CSV / Excel file.
+    The schema is detected automatically.</div>
 </div>
 """
 
 
-def metric_badges(items: list[tuple[str, str, bool]]) -> str:
-    """items: list of (value, label, accent)."""
+def section_html(title: str, subtitle: str = "") -> str:
+    sub = f'<div class="s">{html.escape(subtitle)}</div>' if subtitle else ""
+    return f'<div class="sec"><div class="h">{html.escape(title)}</div>{sub}</div>'
+
+
+def kpi_cards(items: list[dict]) -> str:
+    """items: dicts with value, label, optional note, optional tone ('accent' | 'warn')."""
     cells = "".join(
-        f'<div class="metric{" accent" if acc else ""}">'
-        f'<div class="v">{v}</div><div class="k">{k}</div></div>'
-        for v, k, acc in items
+        f'<div class="kpi {html.escape(i.get("tone", ""))}">'
+        f'<div class="v" title="{html.escape(str(i["value"]))}">{html.escape(str(i["value"]))}</div>'
+        f'<div class="k">{html.escape(i["label"])}</div>'
+        + (f'<div class="n">{html.escape(i["note"])}</div>' if i.get("note") else "")
+        + "</div>"
+        for i in items
     )
-    return f'<div class="metricrow">{cells}</div>'
+    return f'<div class="kpis">{cells}</div>'
+
+
+def insights_html(lines: list[str]) -> str:
+    rows = "".join(f'<div class="row"><span class="dot"></span><span>{_md_bold(t)}</span></div>'
+                   for t in lines)
+    return f'<div class="insights">{rows}</div>'
 
 
 def meter_html(used: int, total: int, label: str) -> str:
     pct = min(100, int(100 * used / total)) if total else 0
     return (
-        f'<div class="side-label">{label}</div>'
+        f'<div class="side-label">{html.escape(label)}</div>'
         f'<div class="meter"><span style="width:{pct}%"></span></div>'
         f'<div class="meter-txt"><span>{used} used</span><span>{total} max</span></div>'
     )

@@ -120,6 +120,33 @@ def _infer_and_convert(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+class DatasetError(ValueError):
+    """A problem with the uploaded file itself, with a message safe to show users."""
+
+
+def _read_text_table(src: Any, sep: str) -> pd.DataFrame:
+    """Read a CSV/TSV, trying UTF-8 first, then the Windows/Excel encodings."""
+    raw = src.read() if hasattr(src, "read") else open(src, "rb").read()
+    if hasattr(src, "seek"):
+        src.seek(0)
+    if b"\x00" in raw[:4096]:
+        raise DatasetError("This doesn't look like a text CSV file (it contains binary data).")
+    if not raw.strip():
+        raise DatasetError("The file is empty.")
+    import io
+    for enc in ("utf-8-sig", "cp1252", "latin-1"):
+        try:
+            return pd.read_csv(io.BytesIO(raw), sep=sep, encoding=enc)
+        except UnicodeDecodeError:
+            continue
+        except pd.errors.EmptyDataError:
+            raise DatasetError("The file is empty.")
+        except pd.errors.ParserError as e:
+            raise DatasetError("The rows don't have a consistent number of columns. "
+                               "Check the file's delimiter and quoting.") from e
+    raise DatasetError("Couldn't detect the file's text encoding.")
+
+
 def load_flat_file_to_sqlite(
     file_path_or_buffer: Any,
     db_path: str,
@@ -134,7 +161,12 @@ def load_flat_file_to_sqlite(
         df = pd.read_excel(file_path_or_buffer)
     else:  # default csv/tsv
         sep = "\t" if file_type == "tsv" else ","
-        df = pd.read_csv(file_path_or_buffer, sep=sep)
+        df = _read_text_table(file_path_or_buffer, sep)
+
+    if df.shape[1] == 0:
+        raise DatasetError("No columns found. Check that the first row contains column names.")
+    if len(df) == 0:
+        raise DatasetError("The file has column names but no data rows.")
 
     df.columns = _dedupe([_sanitize_identifier(c) for c in df.columns])
     df = _infer_and_convert(df)
