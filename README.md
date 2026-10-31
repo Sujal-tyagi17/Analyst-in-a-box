@@ -29,8 +29,27 @@ Nothing is hardcoded to a domain. Column roles (measure, category, date, identif
 
 ## 🖼️ Screenshots
 
-| Overview dashboard | Analytics (EDA) |
-|---|---|
+### Overview dashboard
+Dataset summary, key metrics detected from the columns, and insights calculated directly from the data.
+
+<img src="docs/screenshots/overview.png" alt="Overview dashboard" width="100%">
+
+### AI Analyst
+A question answered by Groq on the live app: direct answer, key findings with figures, an interactive chart, the generated SQL and CSV / PNG downloads.
+
+<img src="docs/screenshots/ai-analyst.png" alt="AI Analyst answering a question with an interactive chart" width="100%">
+
+### Analytics (automated EDA)
+Descriptive statistics, distributions, box plots and category frequencies as interactive Plotly charts.
+
+<img src="docs/screenshots/analytics.png" alt="Analytics section" width="100%">
+
+### Data quality & cleaning
+Column-wise quality checks and a preview of every cleaning change before it is applied. The original upload is never modified.
+
+<img src="docs/screenshots/data-quality.png" alt="Data quality and cleaning" width="100%">
+
+---|---|
 | ![Overview dashboard](docs/screenshots/overview.png) | ![Analytics](docs/screenshots/analytics.png) |
 
 | Data quality & cleaning | Mobile |
@@ -258,7 +277,7 @@ Analyst-in-a-Box/
 │   ├── test_analytics.py     # profiling, cleaning, EDA, loading, PDF tests
 │   └── test_agent.py         # agent, fallback, errors, SQL safety, cache tests
 ├── data/sample_datasets/     # sales.csv, sports.csv, education.csv
-├── docs/screenshots/
+├── docs/screenshots/         # README screenshots
 ├── .streamlit/               # theme config + secrets.toml.example
 ├── requirements.txt
 ├── Dockerfile / docker-compose.yml
