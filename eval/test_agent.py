@@ -106,3 +106,47 @@ def test_sql_auto_limit_and_truncation_warning(sales):
     db, _ = sales
     r = run_sql("SELECT * FROM sales", db, max_rows=10)
     assert r["row_count"] == 10 and r["truncated"] and r["warning"]
+
+
+# ---------------------------------------------------------------- answer cache
+
+import threading  # noqa: E402
+import time  # noqa: E402
+
+from agent.answer_cache import AnswerCache  # noqa: E402
+
+
+def test_cache_reuses_answers_and_skips_failures():
+    c = AnswerCache(ttl=60)
+    calls = []
+    v, hit = c.get_or_compute("k", lambda: calls.append(1) or "ok")
+    v2, hit2 = c.get_or_compute("k", lambda: calls.append(1) or "other")
+    assert (v, hit, v2, hit2, len(calls)) == ("ok", False, "ok", True, 1)
+    c.get_or_compute("bad", lambda: "err", should_cache=lambda r: r != "err")
+    _, hit3 = c.get_or_compute("bad", lambda: "err", should_cache=lambda r: r != "err")
+    assert not hit3  # failures are retried, not cached
+
+
+def test_cache_duplicate_request_waits_instead_of_recomputing():
+    c = AnswerCache(ttl=60)
+    calls = []
+
+    def slow():
+        calls.append(1)
+        time.sleep(0.3)
+        return "answer"
+
+    out = []
+    ts = [threading.Thread(target=lambda: out.append(c.get_or_compute("q", slow)[0])) for _ in range(3)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert out == ["answer"] * 3 and len(calls) == 1
+
+
+def test_cache_expiry():
+    c = AnswerCache(ttl=0.05)
+    c.get_or_compute("k", lambda: 1)
+    time.sleep(0.08)
+    assert c.get_or_compute("k", lambda: 2) == (2, False)

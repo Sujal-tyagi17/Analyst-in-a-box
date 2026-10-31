@@ -217,3 +217,36 @@ def test_eda_figures_build_for_every_sample(tmp_path):
 
 def test_heatmap_skipped_with_one_numeric_column():
     assert E.correlation_heatmap(pd.DataFrame({"a": [1, 2, 3]}), ["a"]) is None
+
+
+# ---------------------------------------------------------------- PDF report
+
+from agent.orchestrator import AgentResult  # noqa: E402
+from analytics import report as R  # noqa: E402
+
+
+def test_pdf_report_builds_with_ai_answers_and_hindi(tmp_path):
+    df = _load_sample("sales", tmp_path)
+    prof = P.build_profile(df)
+    chat = [
+        {"q": "Revenue by region", "result": AgentResult(
+            answer="**West** leads.\n\n| region | total |\n|---|---|\n| West | 594,681 |",
+            sql_queries=["SELECT region, SUM(revenue) FROM sales GROUP BY region"],
+            charts=[{"chart_type": "bar", "x": "region", "y": "total", "title": "t",
+                     "data": [{"region": "West", "total": 594681.0}, {"region": "East", "total": 521433.0}]}])},
+        {"q": "हिंदी प्रश्न", "result": AgentResult(answer="उत्तर **42**")},
+        {"q": "failed", "result": AgentResult(answer="x", error="boom")},   # errors are left out
+    ]
+    pdf = R.build_pdf("sales", prof, df, chat, cleaning_log=["Removed 1 duplicate row(s)."])
+    assert pdf[:4] == b"%PDF" and len(pdf) > 20_000
+
+
+def test_pdf_without_ai_or_charts(tmp_path):
+    df = _load_sample("education", tmp_path)
+    pdf = R.build_pdf("education", P.build_profile(df), df, [], include_ai=False, include_charts=False)
+    assert pdf[:4] == b"%PDF"
+
+
+def test_markdown_flattening_for_pdf():
+    out = R._md_to_pdf_text("## Title\n- a **b**\n| x | y |\n|---|---|\n| 1 | 2 |")
+    assert out.splitlines() == ["Title", "• a **b**", "x   y", "1   2"]

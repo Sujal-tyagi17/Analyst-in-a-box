@@ -64,6 +64,7 @@ class AgentResult:
     charts: list[dict] = field(default_factory=list)   # {"image_base64":..., "title":...}
     analyses: list[dict] = field(default_factory=list)
     error: str | None = None
+    query_results: list[dict] = field(default_factory=list)  # {"sql", "rows"} for CSV export
     provider_used: str | None = None    # provider that produced this answer
     fallback_note: str | None = None    # set when a fallback provider answered
 
@@ -99,6 +100,8 @@ class _ToolRunner:
                 out = toolmod.run_sql(args["query"], self.db_path)
                 self.last_query_result = out
                 self.result.sql_queries.append(out["sql"])
+                self.result.query_results.append(
+                    {"sql": out["sql"], "rows": out["_df"].to_dict(orient="records")})
                 # strip the internal DataFrame before returning to the LLM
                 payload = {k: v for k, v in out.items() if k != "_df"}
                 # cap rows shown to the model to keep tokens sane

@@ -37,8 +37,11 @@ except Exception:
 
 import pandas as pd
 from agent import schema_reader, usage, ui
+from agent.answer_cache import AnswerCache
 from agent.orchestrator import answer_question, AgentResult, log
-from analytics import cleaning, eda, profiling
+import time
+
+from analytics import cleaning, eda, profiling, report
 from analytics.charts import CONFIG as CHART_CONFIG, agent_chart
 
 MAX_SESSION_QUESTIONS = int(os.environ.get("MAX_SESSION_QUESTIONS", "15"))
@@ -56,6 +59,7 @@ SECTIONS = {
     "AI Analyst": ":material/forum:",
     "Data Explorer": ":material/table_view:",
     "Analytics": ":material/insights:",
+    "Reports": ":material/description:",
 }
 
 st.set_page_config(page_title="Analyst-in-a-Box", page_icon="📊", layout="wide")
@@ -84,6 +88,9 @@ def _init_state():
     ss.setdefault("nav", "Overview")
     ss.setdefault("original", None)        # snapshot of the uploaded data while cleaned data is active
     ss.setdefault("clean_preview", None)   # cleaning.CleaningResult awaiting the user's decision
+    ss.setdefault("clean_log", None)       # change log of the cleaning currently in use
+    ss.setdefault("query_log", [])         # every question this session (kept when the chat is cleared)
+    ss.setdefault("pdf", None)             # (key, bytes) of the last generated report
 
 
 _init_state()
@@ -113,6 +120,9 @@ def _load(file_obj_or_path, name: str, ftype: str | None, size: int | None = Non
     ss.nav = "Overview"
     ss.original = None
     ss.clean_preview = None
+    ss.clean_log = None
+    ss.query_log = []
+    ss.pdf = None
 
 
 def _activate_dataframe(frame: pd.DataFrame):
@@ -191,6 +201,15 @@ with st.sidebar:
         ss.upload_error = None
     elif uploaded.file_id != ss.loaded_file_id:
         _load_upload(uploaded)  # loads as soon as a new file is chosen
+
+    if ss.query_log:
+        st.markdown('<div class="side-label">Recent questions</div>', unsafe_allow_html=True)
+        recent = list(dict.fromkeys(e["question"] for e in reversed(ss.query_log)))[:5]
+        for i, q in enumerate(recent):
+            if st.button(q if len(q) <= 60 else q[:57] + "…", key=f"recent_{i}", help="Ask again",
+                         use_container_width=True, icon=":material/history:"):
+                ss.pending_q = q
+                ss.nav = "AI Analyst"
 
     # Provider + fallback order come from Secrets (LLM_PROVIDER / LLM_FALLBACK).
     if not any(os.environ.get(k) for k in
@@ -367,7 +386,7 @@ def render_cleaning():
                 orig = ss.original
                 ss.db_path, ss.schema, ss.schema_text = orig["db_path"], orig["schema"], orig["schema_text"]
                 ss.df, ss.profile = orig["df"], orig["profile"]
-                ss.original, ss.clean_preview = None, None
+                ss.original, ss.clean_preview, ss.clean_log = None, None, None
                 ss.chat, ss.history = [], []
                 st.rerun()
         with c2:
@@ -423,6 +442,7 @@ def render_cleaning():
             ss.original = {"db_path": ss.db_path, "schema": ss.schema, "schema_text": ss.schema_text,
                            "df": df, "profile": ss.profile}
             _activate_dataframe(res.data)
+            ss.clean_log = list(res.changes)
             ss.clean_preview = None
             st.toast("Now using the cleaned data. The chat was cleared.", icon=":material/check_circle:")
             st.rerun()
@@ -537,26 +557,81 @@ def render_analytics():
 
 
 # ---------------------------------------------------------------------------
+# Reports / exports
+# ---------------------------------------------------------------------------
+def render_reports():
+    st.markdown(ui.section_html("PDF analysis report",
+                                "Dataset overview, key metrics, findings, charts and the AI's answers "
+                                "with the SQL behind them"), unsafe_allow_html=True)
+    answered = [t for t in ss.chat if not t["result"].error]
+    c1, c2 = st.columns(2)
+    with c1:
+        inc_ai = st.checkbox(f"Include AI questions and answers ({len(answered)})", value=bool(answered),
+                             disabled=not answered)
+    with c2:
+        inc_charts = st.checkbox("Include charts", value=True)
+    pdf_key = (ss.db_path, len(ss.chat), inc_ai, inc_charts)
+    if st.button("Generate PDF report", icon=":material/picture_as_pdf:", type="primary"):
+        with st.spinner("Building the report…"):
+            try:
+                ss.pdf = (pdf_key, report.build_pdf(ss.dataset_name, prof, df, ss.chat, ss.clean_log,
+                                                    include_ai=inc_ai, include_charts=inc_charts))
+            except Exception:
+                log.exception("PDF build failed")
+                ss.pdf = None
+                st.error("Couldn't build the PDF report.", icon=":material/error:")
+    if ss.pdf and ss.pdf[0] == pdf_key:
+        st.download_button("Download PDF report", ss.pdf[1], file_name=f"{ss.dataset_name}_report.pdf",
+                           mime="application/pdf", icon=":material/download:")
+    if any(re.search(r"[\u0900-\u097F]", t["q"] + (t["result"].answer or "")) for t in answered):
+        st.caption("Hindi text can't be displayed in the PDF yet; those answers are marked in the report.")
+
+    st.markdown(ui.section_html("Data exports"), unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    with c1:
+        _download_csv(df, f"{ss.dataset_name}{'_cleaned' if ss.original is not None else ''}.csv",
+                      "Current data (CSV)" + (" · cleaned" if ss.original is not None else ""))
+    with c2:
+        if ss.original is not None:
+            _download_csv(ss.original["df"], f"{ss.dataset_name}_original.csv", "Original data (CSV)")
+    st.caption("Each AI answer also has its own result CSV and chart PNG, and every interactive chart "
+               "has a PNG download in its toolbar.")
+
+    st.markdown(ui.section_html("Query history", "Every question asked this session, including cleared chats"),
+                unsafe_allow_html=True)
+    if not ss.query_log:
+        st.caption("No questions asked yet.")
+        return
+    hist = pd.DataFrame([{"Time (UTC)": e["time"], "Question": e["question"], "Status": e["status"],
+                          "SQL queries": len(e["sql"]), "Charts": e["charts"],
+                          "SQL": " | ".join(" ".join(q.split()) for q in e["sql"])} for e in ss.query_log])
+    st.dataframe(hist.drop(columns="SQL"), use_container_width=True, hide_index=True)
+    st.download_button("Query history (CSV)", hist.to_csv(index=False).encode("utf-8"),
+                       file_name=f"{ss.dataset_name}_query_history.csv", mime="text/csv",
+                       icon=":material/download:")
+
+
+# ---------------------------------------------------------------------------
 # AI Analyst (chat)
 # ---------------------------------------------------------------------------
-class _AnswerFailed(Exception):
-    """Raised inside the cached call so failed answers are never cached."""
-    def __init__(self, result):
-        super().__init__(result.error)
-        self.result = result
+@st.cache_resource
+def _answer_cache() -> AnswerCache:
+    """One cache shared by all sessions, like st.cache_data was (see agent/answer_cache.py)."""
+    return AnswerCache(ttl=600, max_entries=200)
 
 
-@st.cache_data(ttl=600, max_entries=200, show_spinner=False)
-def _cached_answer(question, db_path, schema_text, provider, history_json, _progress=None):
-    # (the leading underscore keeps the progress callback out of the cache key)
-    # If the same question is submitted twice (double click / a rerun while the
-    # first call is still running), Streamlit holds a per-key lock here, so the
-    # second run waits for and reuses the first answer instead of calling the
-    # LLM again and burning free-tier quota.
-    res = answer_question(question, db_path=db_path, schema_text=schema_text,
-                          provider=provider, history=json.loads(history_json), progress=_progress)
-    if res.error:
-        raise _AnswerFailed(res)
+def _get_answer(question, progress):
+    key = (question, ss.db_path, ss.schema_text, os.environ.get("LLM_PROVIDER"),
+           json.dumps(ss.history, default=str))
+    res, cached = _answer_cache().get_or_compute(
+        key,
+        lambda: answer_question(question, db_path=ss.db_path, schema_text=ss.schema_text,
+                                provider=os.environ.get("LLM_PROVIDER"), history=ss.history,
+                                progress=progress),
+        should_cache=lambda r: not r.error,   # failed answers are never cached
+    )
+    if cached:
+        log.info("answer served from cache")
     return res
 
 
@@ -612,7 +687,7 @@ def _render_analysis(a: dict):
         st.markdown(a.get("note", ""))
 
 
-def _render_result(res):
+def _render_result(res, key: str = "new"):
     if res.error:
         st.error(_clean_answer(res.answer), icon=":material/error:")
     elif not (res.answer or "").strip():
@@ -637,6 +712,26 @@ def _render_result(res):
                 st.code(q, language="sql")
     if getattr(res, "fallback_note", None):
         st.caption(f"↪ {res.fallback_note}")
+    _result_downloads(res, key)
+
+
+def _result_downloads(res, key: str):
+    results = [r for r in getattr(res, "query_results", []) if r.get("rows")]
+    pngs = [c for c in res.charts if c.get("image_base64")]
+    if res.error or not (results or pngs):
+        return
+    cols = st.columns(4)
+    if results:
+        last = results[-1]  # the query the answer is based on
+        with cols[0]:
+            st.download_button("Result (CSV)", pd.DataFrame(last["rows"]).to_csv(index=False).encode("utf-8"),
+                               file_name=f"query_result_{key}.csv", mime="text/csv",
+                               icon=":material/download:", key=f"dl_csv_{key}", use_container_width=True)
+    for i, c in enumerate(pngs[:3]):
+        with cols[1 + i]:
+            st.download_button("Chart (PNG)", base64.b64decode(c["image_base64"]),
+                               file_name=f"chart_{key}_{i + 1}.png", mime="image/png",
+                               icon=":material/image:", key=f"dl_png_{key}_{i}", use_container_width=True)
 
 
 _STEP_LABELS = {
@@ -683,11 +778,21 @@ def _history_entry(res) -> str:
 
 
 def render_analyst():
-    for turn in ss.chat:
+    if ss.chat:
+        c1, c2 = st.columns([4, 1])
+        with c1:
+            st.caption(f"{len(ss.chat)} question(s) in this conversation · "
+                       f"{MAX_SESSION_QUESTIONS - ss.n_questions} left this session")
+        with c2:
+            if st.button("Clear chat", icon=":material/delete_sweep:", use_container_width=True,
+                         help="Start a new conversation. The dataset stays loaded."):
+                ss.chat, ss.history = [], []
+                st.rerun()
+    for i, turn in enumerate(ss.chat):
         with st.chat_message("user"):
             st.markdown(turn["q"])
         with st.chat_message("assistant"):
-            _render_result(turn["result"])
+            _render_result(turn["result"], key=str(i))
 
     if not ss.chat:
         st.markdown(ui.section_html("Ask a question",
@@ -720,14 +825,7 @@ def render_analyst():
     with st.chat_message("assistant"):
         status = st.status("Understanding the question…", expanded=True)
         try:
-            res = _cached_answer(
-                question, ss.db_path, ss.schema_text,
-                os.environ.get("LLM_PROVIDER"),
-                json.dumps(ss.history, default=str),
-                _progress=_Progress(status),
-            )
-        except _AnswerFailed as f:
-            res = f.result
+            res = _get_answer(question, _Progress(status))
         except Exception as e:  # last-resort guard so the question never vanishes
             log.exception("answer_question crashed")
             res = AgentResult(answer="Something went wrong while analysing. Please try again.",
@@ -741,6 +839,10 @@ def render_analyst():
     ss.n_questions += 1
     usage.increment()
     ss.chat.append({"q": question, "result": res})
+    ss.query_log.append({"time": time.strftime("%H:%M:%S", time.gmtime()), "question": question,
+                         "status": "error" if res.error else "answered",
+                         "sql": res.sql_queries, "charts": len(res.charts),
+                         "answer": (res.answer or "")[:300]})
     ss.history.append({"role": "user", "content": question})
     ss.history.append({"role": "assistant", "content": _history_entry(res)})
     ss.history = ss.history[-12:]
@@ -756,3 +858,5 @@ elif nav == "Data Explorer":
     render_explorer()
 elif nav == "Analytics":
     render_analytics()
+elif nav == "Reports":
+    render_reports()
