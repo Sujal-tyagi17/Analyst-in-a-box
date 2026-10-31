@@ -205,6 +205,8 @@ def _render_result(res):
         # blank lines let Markdown (bold, lists) render inside the styled box
         # escape "$" so Streamlit doesn't treat "$...$" as a LaTeX math formula
         answer = res.answer
+        # charts are rendered separately; drop any image markdown the model adds
+        answer = re.sub(r"!\[[^\]]*\](\([^)]*\))?", "", answer).strip()
         # The model sometimes guesses "$" for unlabeled money columns; drop it
         # unless the dataset's schema actually mentions dollars/USD.
         schema_txt = (st.session_state.get("schema_text") or "").lower()

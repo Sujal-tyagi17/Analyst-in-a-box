@@ -28,6 +28,10 @@ Rules:
   customers, products, orders). If the user's question depends on a true total or
   distinct count, run a separate COUNT(*) or COUNT(DISTINCT column) query and use that
   number instead — do not infer totals from the size of a capped GROUP BY/ORDER BY result.
+- Charts from `make_chart` are displayed to the user automatically. NEVER put image
+  markdown, links or placeholders like "![chart]" in your answer, and never say
+  "here is the chart" as the whole answer. Always describe what the chart shows: the
+  highest and lowest points with their values, and the overall pattern.
 - Never assume a currency or unit. Only use a symbol like $, ₹ or € if a column
   name or the data itself states it; otherwise report plain numbers (e.g. "2,660,517").
 - Keep going until you can answer; then give the final insight as plain text
