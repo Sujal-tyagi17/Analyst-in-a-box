@@ -329,25 +329,44 @@ def make_chart(
     x_col: str = x if x and x in df.columns else (cats[0] if cats else df.columns[0])
     y_col: str = y if y and y in df.columns else (nums[0] if nums else (df.columns[1] if len(df.columns) > 1 else df.columns[0]))
 
-    fig, ax = plt.subplots(figsize=(8, 4.5))
+    # Dark theme matching .streamlit/config.toml
+    BG, PANEL, TEXT, MUTED, GRID, ACCENT = (
+        "#141922", "#141922", "#E6E9EF", "#9AA3B2", "#262D3A", "#7C5CFF")
+    fig, ax = plt.subplots(figsize=(8, 4.5), facecolor=BG)
+    ax.set_facecolor(PANEL)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    for side in ("left", "bottom"):
+        ax.spines[side].set_color(GRID)
+    ax.tick_params(colors=MUTED, labelsize=9)
+    ax.grid(axis="y", color=GRID, linewidth=0.8)
+    ax.set_axisbelow(True)
     try:
         plot_df = df.head(50)
         chart_kind = (chart_type or "bar").lower()
         if chart_kind == "line":
-            ax.plot(plot_df[x_col], plot_df[y_col], marker="o")
+            ax.plot(plot_df[x_col], plot_df[y_col], marker="o", color=ACCENT,
+                    linewidth=2.2, markersize=6, markerfacecolor=ACCENT,
+                    markeredgecolor=BG, markeredgewidth=1.5)
         elif chart_kind == "scatter":
-            ax.scatter(plot_df[x_col], plot_df[y_col])
+            ax.scatter(plot_df[x_col], plot_df[y_col], color=ACCENT, alpha=0.75,
+                       edgecolors=BG, linewidths=0.5)
         else:  # bar (default)
-            ax.bar(plot_df[x_col].astype(str), plot_df[y_col])
-        ax.set_xlabel(x_col)
-        ax.set_ylabel(y_col)
-        ax.set_title(title or f"{y_col} by {x_col}")
+            ax.bar(plot_df[x_col].astype(str), plot_df[y_col], color=ACCENT, width=0.65)
+        ax.set_xlabel(x_col.replace("_", " "), color=MUTED, fontsize=10)
+        ax.set_ylabel(y_col.replace("_", " "), color=MUTED, fontsize=10)
+        ax.set_title(title or f"{y_col} by {x_col}", color=TEXT, fontsize=13,
+                     loc="left", pad=12, fontweight="bold")
+        from matplotlib.ticker import FuncFormatter
+        if pd.api.types.is_numeric_dtype(plot_df[y_col]):
+            ax.yaxis.set_major_formatter(
+                FuncFormatter(lambda v, _: f"{v:,.0f}"))
         if plot_df[x_col].astype(str).map(len).max() > 6 or chart_kind == "bar":
             plt.xticks(rotation=45, ha="right")
         fig.tight_layout()
 
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=110)
+        fig.savefig(buf, format="png", dpi=130, facecolor=BG)
         plt.close(fig)
         b64 = base64.b64encode(buf.getvalue()).decode("ascii")
     except Exception as e:

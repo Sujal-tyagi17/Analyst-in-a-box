@@ -189,8 +189,7 @@ def _render_result(res):
             for q in res.sql_queries:
                 st.code(q, language="sql")
     for ch in res.charts:
-        st.image(base64.b64decode(ch["image_base64"]), caption=ch.get("title"),
-                 use_container_width=True)
+        st.image(base64.b64decode(ch["image_base64"]), use_container_width=True)
     if res.analyses:
         with st.expander("📈 Statistical analysis", expanded=False):
             for a in res.analyses:
@@ -210,8 +209,13 @@ def _render_result(res):
         # The model sometimes guesses "$" for unlabeled money columns; drop it
         # unless the dataset's schema actually mentions dollars/USD.
         schema_txt = (st.session_state.get("schema_text") or "").lower()
-        if not any(k in schema_txt for k in ("usd", "dollar", "$")):
-            answer = re.sub(r"\$\s?(?=\d)", "", answer)
+        # Same for other guessed currency symbols.
+        for sym, hints in (("$", ("usd", "dollar", "$")),
+                           ("₹", ("inr", "rupee", "₹")),
+                           ("€", ("eur", "euro", "€")),
+                           ("£", ("gbp", "pound", "£"))):
+            if not any(k in schema_txt for k in hints):
+                answer = re.sub(re.escape(sym) + r"\s?(?=\d)", "", answer)
         safe = answer.replace("$", "\\$")
         st.markdown(f'<div class="insight">\n\n{safe}\n\n</div>', unsafe_allow_html=True)
 
