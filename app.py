@@ -7,6 +7,7 @@ SQL + chart + written insight. Dataset-agnostic end to end.
 from __future__ import annotations
 
 import os
+import re
 import json
 import base64
 import tempfile
@@ -203,7 +204,13 @@ def _render_result(res):
     else:
         # blank lines let Markdown (bold, lists) render inside the styled box
         # escape "$" so Streamlit doesn't treat "$...$" as a LaTeX math formula
-        safe = res.answer.replace("$", "\\$")
+        answer = res.answer
+        # The model sometimes guesses "$" for unlabeled money columns; drop it
+        # unless the dataset's schema actually mentions dollars/USD.
+        schema_txt = (st.session_state.get("schema_text") or "").lower()
+        if not any(k in schema_txt for k in ("usd", "dollar", "$")):
+            answer = re.sub(r"\$\s?(?=\d)", "", answer)
+        safe = answer.replace("$", "\\$")
         st.markdown(f'<div class="insight">\n\n{safe}\n\n</div>', unsafe_allow_html=True)
 
 
