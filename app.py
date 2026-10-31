@@ -87,7 +87,9 @@ def _init_state():
     ss.setdefault("history", [])         # provider-neutral msg history for follow-ups
     ss.setdefault("n_questions", 0)
     ss.setdefault("pending_q", None)     # queued question from example chips
-    ss.setdefault("nav", "Overview")
+    ss.setdefault("section", "Overview")   # the section shown (see _go_to)
+    ss.setdefault("nav_ver", 0)            # bumped to rebuild the section bar after a code-driven switch
+    ss.setdefault("uploader_ver", 0)       # bumped to empty the file uploader
     ss.setdefault("original", None)        # snapshot of the uploaded data while cleaned data is active
     ss.setdefault("clean_preview", None)   # cleaning.CleaningResult awaiting the user's decision
     ss.setdefault("clean_log", None)       # change log of the cleaning currently in use
@@ -120,7 +122,7 @@ def _load(file_obj_or_path, name: str, ftype: str | None, size: int | None = Non
     ss.chat = []
     ss.history = []
     ss.n_questions = 0
-    ss.nav = "Overview"
+    _go_to("Overview")
     ss.original = None
     ss.clean_preview = None
     ss.clean_log = None
@@ -145,11 +147,22 @@ def _activate_dataframe(frame: pd.DataFrame):
     ss.chat, ss.history, ss.inflight = [], [], None
 
 
+def _go_to(section: str):
+    """Switch section from code. Changing a widget's value from code leaves the old
+    segment highlighted too, so the section bar is rebuilt with the new default."""
+    if ss.get("section") != section:
+        ss.section = section
+        ss.nav_ver = ss.get("nav_ver", 0) + 1
+
+
 def _load_sample(key: str):
     path = os.path.join("data", "sample_datasets", f"{key}.csv")
     try:
         _load(path, key, "csv", os.path.getsize(path))
         ss.upload_error = None
+        # empty the uploader so choosing the same file again later loads it straight away
+        ss.uploader_ver += 1
+        ss.loaded_file_id = None
         st.toast(f"Loaded the {SAMPLES[key][0]} sample", icon=":material/check_circle:")
         return True
     except Exception:
@@ -200,7 +213,7 @@ with st.sidebar:
 
     st.markdown('<div class="side-label">Upload your own</div>', unsafe_allow_html=True)
     uploaded = st.file_uploader("Dataset (CSV / XLSX)", type=["csv", "xlsx", "xls"],
-                                label_visibility="collapsed", key="uploader")
+                                label_visibility="collapsed", key=f"uploader_{ss.uploader_ver}")
     if uploaded is None:
         ss.upload_error = None
     elif uploaded.file_id != ss.loaded_file_id:
@@ -213,7 +226,7 @@ with st.sidebar:
             if st.button(q if len(q) <= 60 else q[:57] + "…", key=f"recent_{i}", help="Ask again",
                          use_container_width=True, icon=":material/history:"):
                 ss.pending_q = q
-                ss.nav = "AI Analyst"
+                _go_to("AI Analyst")
 
     # Provider + fallback order come from Secrets (LLM_PROVIDER / LLM_FALLBACK).
     if not any(os.environ.get(k) for k in
@@ -252,11 +265,16 @@ table = ss.schema.tables[0]
 st.markdown(ui.topbar_html(ss.dataset_name, prof.rows, prof.columns,
                            profiling.fmt_bytes(prof.file_bytes or prof.memory_bytes)),
             unsafe_allow_html=True)
-nav = st.segmented_control("Section", list(SECTIONS), key="nav",
-                           format_func=lambda s: f"{SECTIONS[s]}\u2002{s}",
-                           label_visibility="collapsed")
-if nav is None:  # clicking the selected segment deselects it; fall back to Overview
-    nav = "Overview"
+picked = st.segmented_control("Section", list(SECTIONS), default=ss.section,
+                              key=f"nav_{ss.nav_ver}",
+                              format_func=lambda s: f"{SECTIONS[s]}\u2002{s}",
+                              label_visibility="collapsed")
+if picked:
+    ss.section = picked
+else:  # clicking the selected segment deselects it; redraw the bar with it still selected
+    ss.nav_ver += 1
+    st.rerun()
+nav = ss.section
 
 
 # ---------------------------------------------------------------------------
