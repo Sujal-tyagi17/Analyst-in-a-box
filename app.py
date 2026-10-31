@@ -23,7 +23,7 @@ for _k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY", "GEMINI_API_KE
 
 import pandas as pd
 from agent import schema_reader, usage, ui
-from agent.orchestrator import answer_question
+from agent.orchestrator import answer_question, AgentResult, log
 
 MAX_SESSION_QUESTIONS = int(os.environ.get("MAX_SESSION_QUESTIONS", "15"))
 
@@ -50,6 +50,8 @@ st.markdown(ui.CSS, unsafe_allow_html=True)
 # ---------------------------------------------------------------------------
 def _init_state():
     ss = st.session_state
+    if "db_path" not in ss:
+        log.info("new browser session started (empty state)")
     ss.setdefault("db_path", None)
     ss.setdefault("schema", None)
     ss.setdefault("schema_text", None)
@@ -230,6 +232,9 @@ if schema is not None and not st.session_state.chat:
 typed = st.chat_input("Ask about your data…" if schema is not None else "Load a dataset first")
 question = typed or st.session_state.pending_q
 st.session_state.pending_q = None
+if question:
+    log.info("new question: %r (dataset loaded=%s, chat turns=%d)", question[:120],
+             schema is not None, len(st.session_state.chat))
 
 if question:
     if schema is None:
@@ -244,13 +249,20 @@ if question:
             st.markdown(question)
         with st.chat_message("assistant"):
             with st.spinner("Analyzing your data…"):
-                res = answer_question(
-                    question,
-                    db_path=st.session_state.db_path,
-                    schema_text=st.session_state.schema_text,
-                    provider=os.environ.get("LLM_PROVIDER"),
-                    history=st.session_state.history,
-                )
+                try:
+                    res = answer_question(
+                        question,
+                        db_path=st.session_state.db_path,
+                        schema_text=st.session_state.schema_text,
+                        provider=os.environ.get("LLM_PROVIDER"),
+                        history=st.session_state.history,
+                    )
+                except Exception as e:  # last-resort guard so the question never vanishes
+                    log.exception("answer_question crashed")
+                    res = AgentResult(answer=f"Something went wrong: {type(e).__name__}: {e}",
+                                      error=str(e))
+            log.info("rendering answer: error=%s answer_len=%d charts=%d", res.error,
+                     len(res.answer or ""), len(res.charts))
             _render_result(res)
 
         st.session_state.n_questions += 1
@@ -259,4 +271,5 @@ if question:
         st.session_state.history.append({"role": "user", "content": question})
         st.session_state.history.append({"role": "assistant", "content": res.answer})
         st.session_state.history = st.session_state.history[-12:]
+        log.info("saved to chat (now %d turns); rerunning", len(st.session_state.chat))
         st.rerun()   # refresh sidebar meters + collapse example chips

@@ -13,12 +13,21 @@ from __future__ import annotations
 
 import os
 import json
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from . import tools as toolmod
 from .prompts import build_system_prompt, TOOLS
+
+log = logging.getLogger("aib")
+if not log.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("[aib %(asctime)s] %(levelname)s %(message)s", "%H:%M:%S"))
+    log.addHandler(_h)
+    log.setLevel(logging.INFO)
+    log.propagate = False
 
 DEFAULT_ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
 MAX_STEPS = int(os.environ.get("AGENT_MAX_STEPS", "8"))
@@ -72,6 +81,7 @@ class _ToolRunner:
         self.last_query_result: dict | None = None
 
     def execute(self, name: str, args: dict) -> dict:
+        log.info("tool call: %s args=%s", name, json.dumps(args, default=str)[:300])
         try:
             if name == "run_sql":
                 out = toolmod.run_sql(args["query"], self.db_path)
@@ -113,9 +123,11 @@ class _ToolRunner:
 
             return {"error": f"Unknown tool '{name}'."}
         except toolmod.SQLValidationError as e:
+            log.warning("tool %s: SQL rejected: %s", name, e)
             self.result.steps.append({"tool": name, "args": args, "ok": False, "error": str(e)})
             return {"error": f"SQL rejected: {e}"}
         except Exception as e:  # never let a bad tool call crash the loop
+            log.exception("tool %s failed", name)
             self.result.steps.append({"tool": name, "args": args, "ok": False, "error": str(e)})
             return {"error": f"Tool error: {e}"}
 
@@ -333,17 +345,22 @@ def _run_openai_compatible(system: str, question: str, runner: _ToolRunner,
     messages.append({"role": "user", "content": question})
     oa_tools = _openai_tools()
 
-    for _ in range(MAX_STEPS):
+    for step in range(MAX_STEPS):
+        log.info("%s step %d: calling model", model, step + 1)
         resp = client.chat.completions.create(
             model=model, messages=messages, tools=oa_tools,
         )
         msg = resp.choices[0].message
+        log.info("%s step %d: finish=%s tool_calls=%d text_len=%d", model, step + 1,
+                 resp.choices[0].finish_reason, len(msg.tool_calls or []),
+                 len(msg.content or ""))
         messages.append(msg.model_dump(exclude_none=True))
 
         if not msg.tool_calls:
             answer = (msg.content or "").strip()
             if answer:
                 return answer
+            log.warning("%s returned empty final text; asking again without tools", model)
             # Some providers (notably Gemini) occasionally end with an empty
             # message after tool calls. Ask once more for the written answer.
             messages.append({
@@ -410,8 +427,13 @@ def answer_question(
     primary = (provider or os.environ.get("LLM_PROVIDER", "groq")).lower()
     failures: list[str] = []
     result: AgentResult | None = None
-    for p in _provider_chain(primary):
+    chain = _provider_chain(primary)
+    log.info("question=%r providers=%s", question[:120], chain)
+    for p in chain:
+        t0 = time.time()
         result = _answer_with_provider(question, db_path, schema_text, p, history)
+        log.info("provider=%s done in %.1fs error=%s answer_len=%d", p, time.time() - t0,
+                 result.error, len(result.answer or ""))
         if not result.error:
             if failures:
                 result.fallback_note = f"Answered by {p} (fallback) — " + "; ".join(failures)
@@ -469,6 +491,7 @@ def _answer_with_provider(
             result.answer = result.error
         result.steps.append({"elapsed_s": round(time.time() - start, 2)})
     except Exception as e:
+        log.exception("provider %s failed", provider)
         result.error = f"{type(e).__name__}: {e}"
         result.answer = (
             "The analysis call failed. This is usually a bad/missing API key, "
