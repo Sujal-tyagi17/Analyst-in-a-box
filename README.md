@@ -37,7 +37,9 @@ Nothing is hardcoded to a domain. Column roles (measure, category, date, identif
 |---|---|
 | ![Data quality and cleaning](docs/screenshots/data-quality.png) | ![Mobile layout](docs/screenshots/mobile.png) |
 
-<!-- AI Analyst chat screenshot: add docs/screenshots/ai-analyst.png from the live app -->
+| AI Analyst (live app, Groq) |
+|---|
+| ![AI Analyst answering a question with an interactive chart](docs/screenshots/ai-analyst.png) |
 
 ---
 
@@ -198,16 +200,16 @@ Docker is also supported: `docker compose up --build` (reads the same variables 
 ```bash
 python -m pytest eval/
 ```
-**47 tests**, covering:
+**53 tests**, covering:
 - read-only SQL rejection, auto-limit and truncation warnings;
 - column-role detection, metrics and insights (checked against pandas);
 - cleaning (never modifies the original, logs every change, never invents IDs or dates);
 - EDA charts for every sample dataset;
 - file loading (Excel vs CSV, cp1252, empty and binary files);
-- provider fallback, error messages and the answer cache;
+- provider fallback, error messages, the answer cache and answer formatting;
 - the PDF report.
 
-All 47 passed on Python 3.11 after a clean install from `requirements.txt` (31 Oct 2026).
+All 53 passed on Python 3.11 (31 Oct 2026).
 
 ### Evaluation harness
 The harness asks **18 questions across the 3 sample datasets** and checks each answer against an independent SQL query run directly on the data.
@@ -220,12 +222,13 @@ python -m eval.run_eval --limit 3         # quick check
 
 | Run | Result | Date |
 |---|---:|---|
-| Real LLM: Groq `openai/gpt-oss-120b` | 16/18 (89%): Sales 6/6, Sports 5/6, Education 5/6 | before the 31 Oct 2026 prompt update |
-| Offline mock planner (no API) | 17/18 (94%) | 31 Oct 2026, after all changes |
+| Real LLM: Groq `openai/gpt-oss-120b` (current version) | **17/18 (94%)**: Sales 6/6, Sports 6/6, Education 5/6 | 31 Oct 2026 |
+| Real LLM: Groq `openai/gpt-oss-120b` (earlier version) | 16/18 (89%) | before 31 Oct 2026 |
+| Offline mock planner (no API) | 17/18 (94%) | 31 Oct 2026 |
 
-The 31 Oct 2026 update changed the AI's answer format, so the real-LLM score should be re-measured with `python -m eval.run_eval`. The mock planner is a deliberately simple keyword planner used to test the pipeline without API cost; it is not a measure of answer quality.
+The one miss is a strict-checker case, not a wrong answer: for *"Do male and female students differ in average exam score?"* the model compared the group averages with plain SQL, while the checker expects the dedicated `group_compare` statistical test. The mock planner is a deliberately simple keyword planner used to test the pipeline without API cost; it is not a measure of answer quality.
 
-A manual test on an unseen 300-order e-commerce dataset (totals, top groups, follow-ups, return rates, a line chart, correlation, a Hindi question, refusing to delete data, and saying when profit can't be calculated) passed 12/12 on the live app before the update.
+A manual test on an unseen 300-order e-commerce dataset (totals, top groups, follow-ups, return rates, a line chart, correlation, a Hindi question, refusing to delete data, and saying when profit can't be calculated) passed 12/12 on the live app; after the update, the totals, follow-up, line chart, Hindi, answer-cache and PDF checks were repeated on the live app and passed.
 
 ---
 
@@ -280,7 +283,7 @@ Analyst-in-a-Box/
 
 - Multiple files and joins, and a direct PostgreSQL connection.
 - Hindi font support in the PDF report.
-- Re-run and extend the evaluation harness (add the 300-order test set) after each prompt change.
+- Extend the evaluation harness with the 300-order test set, and make the group-comparison check accept a correct SQL comparison.
 - Let users correct a column's detected role.
 - Saved sessions and shareable report links.
 
