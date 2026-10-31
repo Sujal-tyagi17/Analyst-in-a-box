@@ -49,17 +49,6 @@ Column-wise quality checks and a preview of every cleaning change before it is a
 
 <img src="docs/screenshots/data-quality.png" alt="Data quality and cleaning" width="100%">
 
----|---|
-| ![Overview dashboard](docs/screenshots/overview.png) | ![Analytics](docs/screenshots/analytics.png) |
-
-| Data quality & cleaning | Mobile |
-|---|---|
-| ![Data quality and cleaning](docs/screenshots/data-quality.png) | ![Mobile layout](docs/screenshots/mobile.png) |
-
-| AI Analyst (live app, Groq) |
-|---|
-| ![AI Analyst answering a question with an interactive chart](docs/screenshots/ai-analyst.png) |
-
 ---
 
 ## ✨ Features
