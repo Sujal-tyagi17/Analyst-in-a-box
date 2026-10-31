@@ -344,7 +344,27 @@ def make_chart(
     try:
         plot_df = df.head(50)
         chart_kind = (chart_type or "bar").lower()
-        if chart_kind == "line":
+        if chart_kind == "histogram":
+            vals = pd.to_numeric(df[y_col if y_col in nums else (nums[0] if nums else y_col)],
+                                 errors="coerce").dropna()
+            ax.hist(vals, bins=min(40, max(10, int(len(vals) ** 0.5))), color=ACCENT, edgecolor=BG)
+            x_col, y_col = vals.name, "count"
+        elif chart_kind == "box":
+            vcol = y_col if y_col in nums else (nums[0] if nums else y_col)
+            if x_col in cats and plot_df[x_col].nunique() <= 20:
+                groups = list(df.groupby(x_col)[vcol])
+                ax.boxplot([pd.to_numeric(g, errors="coerce").dropna() for _, g in groups],
+                           labels=[str(k) for k, _ in groups], patch_artist=True,
+                           boxprops=dict(facecolor=ACCENT, alpha=.35, edgecolor=ACCENT),
+                           medianprops=dict(color=TEXT), whiskerprops=dict(color=MUTED),
+                           capprops=dict(color=MUTED), flierprops=dict(markeredgecolor=MUTED))
+            else:
+                ax.boxplot(pd.to_numeric(df[vcol], errors="coerce").dropna(), patch_artist=True,
+                           boxprops=dict(facecolor=ACCENT, alpha=.35, edgecolor=ACCENT),
+                           medianprops=dict(color=TEXT))
+                x_col = ""
+            y_col = vcol
+        elif chart_kind == "line":
             ax.plot(plot_df[x_col], plot_df[y_col], marker="o", color=ACCENT,
                     linewidth=2.2, markersize=6, markerfacecolor=ACCENT,
                     markeredgecolor=BG, markeredgewidth=1.5)
@@ -358,10 +378,11 @@ def make_chart(
         ax.set_title(title or f"{y_col} by {x_col}", color=TEXT, fontsize=13,
                      loc="left", pad=12, fontweight="bold")
         from matplotlib.ticker import FuncFormatter
-        if pd.api.types.is_numeric_dtype(plot_df[y_col]):
+        if y_col in plot_df.columns and pd.api.types.is_numeric_dtype(plot_df[y_col]):
             ax.yaxis.set_major_formatter(
                 FuncFormatter(lambda v, _: f"{v:,.0f}"))
-        if plot_df[x_col].astype(str).map(len).max() > 6 or chart_kind == "bar":
+        if chart_kind in ("bar", "box") or (x_col in plot_df.columns
+                                             and plot_df[x_col].astype(str).map(len).max() > 6):
             plt.xticks(rotation=45, ha="right")
         fig.tight_layout()
 

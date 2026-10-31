@@ -295,3 +295,30 @@ def build_profile(df: pd.DataFrame, file_bytes: int | None = None) -> Profile:
 
 KIND_LABEL = {MEASURE: "Numeric", CATEGORY: "Category", PERIOD: "Period",
               DATETIME: "Date/time", IDENTIFIER: "Identifier", TEXT: "Text"}
+
+
+def suggest_questions(df: pd.DataFrame, kinds: dict[str, str], limit: int = 4) -> list[str]:
+    """Starter questions built from this dataset's own columns (no AI involved)."""
+    m = primary_measure(df, kinds)
+    g = primary_category(df, kinds)
+    ms = measures(df, kinds)
+    dates = [c for c, k in kinds.items() if k == DATETIME]
+    periods = [c for c, k in kinds.items() if k == PERIOD]
+    nice = lambda c: c.replace("_", " ")  # noqa: E731
+    qs: list[str] = []
+    if m and g:
+        agg = "total" if is_additive(m) else "average"
+        qs.append(f"Which {nice(g)} has the highest {agg} {nice(m)}?")
+    if m and (dates or periods):
+        qs.append(f"How has {nice(m)} changed over time? Show a line chart.")
+    if len(ms) >= 2:
+        other = next((c for c in ms if c != m), None)
+        if other:
+            qs.append(f"Is there a relationship between {nice(other)} and {nice(m or ms[0])}?")
+    if m:
+        qs.append(f"Are there any outliers in {nice(m)}?")
+    cats = [c for c in categories(df, kinds) if c != g and 2 <= df[c].nunique() <= 20]
+    if m and cats and len(qs) < limit:
+        qs.append(f"Compare the average {nice(m)} across {nice(cats[0])}.")
+    qs.append("Give me a quick summary of this dataset.")
+    return qs[:limit]

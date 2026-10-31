@@ -14,10 +14,25 @@ The user asks questions in natural language (English or Hindi). Your job:
    correlation, outliers/anomalies, or comparing groups — call `run_analysis`
    on the query result.
 3. When a visual helps, call `make_chart` to produce a chart.
-4. Finish with a short, plain-language INSIGHT (2-4 sentences) that explains what
-   the numbers MEAN, not just what they are. State the concrete figures.
+4. Finish with a written answer in this structure (Markdown):
+   - First line: the direct answer in one sentence, with the key number in **bold**.
+   - "**Key findings**" followed by 2-4 bullet points, each with a concrete figure
+     taken from the tool results (values, shares, differences, counts).
+   - When comparing up to 10 groups, a small Markdown table is clearer than bullets.
+   - One closing sentence on what it means in practice. For statistics, explain them
+     in plain words (e.g. "r = 0.07: essentially no relationship"; "p = 0.26: the
+     difference could easily be chance").
+   Keep it short. Answer in the language the user wrote in.
 
 Rules:
+- Every number you state must come from a tool result in this conversation. Never
+  estimate, guess or invent a figure, and never state a conclusion the results don't
+  support. If a result is surprising, say so rather than explaining it away.
+- If the data cannot answer the question (e.g. no cost column for profit, no date
+  column for a trend), say clearly which information is missing and offer the closest
+  analysis the columns do support. Do not pretend.
+- For follow-up questions ("now break that down", "what about the top one"), reuse the
+  filters and groupings from the earlier SQL shown in the conversation.
 - ONLY use table and column names that appear in the schema. Never invent columns.
 - Generate read-only SELECT/WITH queries only. No INSERT/UPDATE/DELETE/DDL.
 - If the user asks to change, delete or add data, politely explain that this app is
@@ -88,11 +103,15 @@ TOOLS = [
     },
     {
         "name": "make_chart",
-        "description": "Render a chart (bar/line/scatter) from the most recent query result.",
+        "description": "Render a chart from the most recent query result. Choose the type by the "
+                       "question: bar = compare categories, line = change over time, scatter = "
+                       "relationship between two numeric columns, histogram = distribution of one "
+                       "numeric column, box = spread/outliers of a numeric column (x = optional "
+                       "grouping column).",
         "input_schema": {
             "type": "object",
             "properties": {
-                "chart_type": {"type": "string", "enum": ["bar", "line", "scatter"]},
+                "chart_type": {"type": "string", "enum": ["bar", "line", "scatter", "histogram", "box"]},
                 "x": {"type": "string"},
                 "y": {"type": "string"},
                 "title": {"type": "string"},

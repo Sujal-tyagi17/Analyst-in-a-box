@@ -39,7 +39,7 @@ import pandas as pd
 from agent import schema_reader, usage, ui
 from agent.orchestrator import answer_question, AgentResult, log
 from analytics import cleaning, eda, profiling
-from analytics.charts import CONFIG as CHART_CONFIG
+from analytics.charts import CONFIG as CHART_CONFIG, agent_chart
 
 MAX_SESSION_QUESTIONS = int(os.environ.get("MAX_SESSION_QUESTIONS", "15"))
 MAX_UPLOAD_MB = 200
@@ -50,13 +50,6 @@ SAMPLES = {
     "education": ("Education", "Students, scores, study hours"),
 }
 
-# Generic starter questions that work on any dataset.
-EXAMPLE_QS = [
-    "Give me a quick summary of this dataset.",
-    "What are the top categories by the main metric?",
-    "Is there a correlation between the numeric columns?",
-    "Are there any outliers I should know about?",
-]
 
 SECTIONS = {
     "Overview": ":material/dashboard:",
@@ -554,13 +547,14 @@ class _AnswerFailed(Exception):
 
 
 @st.cache_data(ttl=600, max_entries=200, show_spinner=False)
-def _cached_answer(question, db_path, schema_text, provider, history_json):
+def _cached_answer(question, db_path, schema_text, provider, history_json, _progress=None):
+    # (the leading underscore keeps the progress callback out of the cache key)
     # If the same question is submitted twice (double click / a rerun while the
     # first call is still running), Streamlit holds a per-key lock here, so the
     # second run waits for and reuses the first answer instead of calling the
     # LLM again and burning free-tier quota.
     res = answer_question(question, db_path=db_path, schema_text=schema_text,
-                          provider=provider, history=json.loads(history_json))
+                          provider=provider, history=json.loads(history_json), progress=_progress)
     if res.error:
         raise _AnswerFailed(res)
     return res
@@ -582,27 +576,110 @@ def _clean_answer(answer: str) -> str:
     return answer.replace("$", "\\$")
 
 
+def _render_analysis(a: dict):
+    """Statistical results as plain language plus the key numbers, instead of raw JSON."""
+    m = a.get("method", "")
+    p = a.get("p_value")
+    p_txt = "" if p is None else ("p < 0.001" if p < 0.001 else f"p = {p:.3g}")
+    sig = None if p is None else ("statistically significant (p < 0.05)" if p < 0.05
+                                  else "not statistically significant — could be chance")
+    if m == "correlation" and "pearson_r" in a:
+        r = a["pearson_r"]
+        strength = ("strong" if abs(r) >= 0.7 else "moderate" if abs(r) >= 0.4
+                    else "weak" if abs(r) >= 0.2 else "essentially no")
+        st.markdown(f"**Correlation · {a['x']} vs {a['y']}**  \n"
+                    f"r = **{r:.2f}** ({strength} {'positive' if r > 0 else 'negative'} relationship) · "
+                    f"{p_txt}, {sig}.")
+    elif m == "trend" and "slope" in a:
+        direction = "rising" if a["slope"] > 0 else "falling" if a["slope"] < 0 else "flat"
+        st.markdown(f"**Trend · {a['y']}**  \n{direction.capitalize()} by {a['slope']:,.3g} per step · "
+                    f"R² = {a['r_squared']:.2f} (share of variation the trend explains) · {sig}.")
+    elif m == "outliers" and "n_outliers" in a:
+        lo, hi = a["bounds"]
+        st.markdown(f"**Outliers · {a['column']}**  \n**{a['n_outliers']}** value(s) outside the normal "
+                    f"range {lo:,.2f} – {hi:,.2f} (IQR rule).")
+    elif m == "group_compare" and "group_means" in a:
+        test = {"welch_t": "Welch t-test", "anova": "ANOVA"}.get(a.get("test"), "comparison")
+        st.markdown(f"**Group comparison · {a['value']} by {a['group']}**"
+                    + (f"  \n{test}: {p_txt}, {sig}." if p is not None else ""))
+        st.dataframe(pd.DataFrame({a["group"]: list(a["group_means"]),
+                                   f"average {a['value']}": list(a["group_means"].values())}),
+                     hide_index=True, use_container_width=True)
+    elif m == "describe" and "summary" in a:
+        st.markdown("**Summary statistics**")
+        st.dataframe(pd.DataFrame(a["summary"]), use_container_width=True)
+    else:
+        st.markdown(a.get("note", ""))
+
+
 def _render_result(res):
-    if res.sql_queries:
-        with st.expander("Generated SQL", icon=":material/code:", expanded=False):
-            for q in res.sql_queries:
-                st.code(q, language="sql")
-    for ch in res.charts:
-        st.image(base64.b64decode(ch["image_base64"]), use_container_width=True)
-    if res.analyses:
-        with st.expander("Statistical analysis", icon=":material/query_stats:", expanded=False):
-            for a in res.analyses:
-                st.json(a)
-    if getattr(res, "fallback_note", None):
-        st.caption(f"↪ {res.fallback_note}")
     if res.error:
-        st.error(res.answer.replace("$", "\\$"))
+        st.error(_clean_answer(res.answer), icon=":material/error:")
     elif not (res.answer or "").strip():
         st.warning("The model returned an empty answer. Please try asking again.", icon=":material/warning:")
     else:
         # blank lines let Markdown (bold, lists, tables) render inside the styled box
         st.markdown(f'<div class="insight">\n\n{_clean_answer(res.answer)}\n\n</div>',
                     unsafe_allow_html=True)
+    for ch in res.charts:
+        fig = agent_chart(ch)
+        if fig is not None:
+            st.plotly_chart(fig, use_container_width=True, theme=None, config=CHART_CONFIG)
+        else:
+            st.image(base64.b64decode(ch["image_base64"]), use_container_width=True)
+    if res.analyses:
+        with st.expander("Statistical analysis", icon=":material/query_stats:", expanded=False):
+            for a in res.analyses:
+                _render_analysis(a)
+    if res.sql_queries:
+        with st.expander("Generated SQL", icon=":material/code:", expanded=False):
+            for q in res.sql_queries:
+                st.code(q, language="sql")
+    if getattr(res, "fallback_note", None):
+        st.caption(f"↪ {res.fallback_note}")
+
+
+_STEP_LABELS = {
+    "thinking": "Understanding the question",
+    "reviewing": "Reviewing the results",
+    "writing": "Writing the answer",
+    "analysis": "Performing statistical analysis",
+    "chart": "Preparing the visualization",
+    "fallback": "Main AI model unavailable, switching to the backup model",
+}
+
+
+class _Progress:
+    """Turns the agent's real steps into lines inside an st.status box."""
+
+    def __init__(self, status):
+        self.status = status
+
+    def __call__(self, event: str, detail: str = ""):
+        if event == "sql":
+            self.status.write(":material/check: Generated SQL")
+            self.status.update(label="Executing the query…")
+            self.status.write(":material/database: Executing the query")
+            return
+        text = _STEP_LABELS.get(event)
+        if not text:
+            return
+        if event == "analysis" and detail:
+            text += f" ({detail.replace('_', ' ')})"
+        if event == "chart" and detail:
+            text += f" ({detail} chart)"
+        self.status.update(label=f"{text}…")
+        self.status.write(f":material/arrow_right: {text}")
+
+
+def _history_entry(res) -> str:
+    """What the model sees of its previous answer: the text plus the SQL it ran,
+    so follow-ups ('now break that down') can reuse the same filters."""
+    text = res.answer or ""
+    if res.sql_queries:
+        sql = " | ".join(q.replace("\n", " ")[:300] for q in res.sql_queries[-2:])
+        text += f"\n[SQL used: {sql}]"
+    return text
 
 
 def render_analyst():
@@ -617,7 +694,7 @@ def render_analyst():
                                     "In English or Hindi. Follow-up questions remember the conversation."),
                     unsafe_allow_html=True)
         ex_cols = st.columns(2)
-        for i, eq in enumerate(EXAMPLE_QS):
+        for i, eq in enumerate(profiling.suggest_questions(df, prof.kinds)):
             with ex_cols[i % 2]:
                 if st.button(eq, key=f"eq_{i}", use_container_width=True):
                     ss.pending_q = eq
@@ -641,19 +718,22 @@ def render_analyst():
     with st.chat_message("user"):
         st.markdown(question)
     with st.chat_message("assistant"):
-        with st.spinner("Analyzing your data…"):
-            try:
-                res = _cached_answer(
-                    question, ss.db_path, ss.schema_text,
-                    os.environ.get("LLM_PROVIDER"),
-                    json.dumps(ss.history, default=str),
-                )
-            except _AnswerFailed as f:
-                res = f.result
-            except Exception as e:  # last-resort guard so the question never vanishes
-                log.exception("answer_question crashed")
-                res = AgentResult(answer=f"Something went wrong: {type(e).__name__}: {e}",
-                                  error=str(e))
+        status = st.status("Understanding the question…", expanded=True)
+        try:
+            res = _cached_answer(
+                question, ss.db_path, ss.schema_text,
+                os.environ.get("LLM_PROVIDER"),
+                json.dumps(ss.history, default=str),
+                _progress=_Progress(status),
+            )
+        except _AnswerFailed as f:
+            res = f.result
+        except Exception as e:  # last-resort guard so the question never vanishes
+            log.exception("answer_question crashed")
+            res = AgentResult(answer="Something went wrong while analysing. Please try again.",
+                              error=str(e))
+        status.update(label="Couldn't complete the analysis" if res.error else "Analysis complete",
+                      state="error" if res.error else "complete", expanded=False)
         log.info("rendering answer: error=%s answer_len=%d charts=%d", res.error,
                  len(res.answer or ""), len(res.charts))
         _render_result(res)
@@ -662,7 +742,7 @@ def render_analyst():
     usage.increment()
     ss.chat.append({"q": question, "result": res})
     ss.history.append({"role": "user", "content": question})
-    ss.history.append({"role": "assistant", "content": res.answer})
+    ss.history.append({"role": "assistant", "content": _history_entry(res)})
     ss.history = ss.history[-12:]
     log.info("saved to chat (now %d turns); rerunning", len(ss.chat))
     st.rerun()   # refresh sidebar meters + collapse example chips

@@ -43,3 +43,53 @@ def label(col: str) -> str:
 CONFIG = {"displaylogo": False,
           "toImageButtonOptions": {"format": "png", "scale": 2},
           "modeBarButtonsToRemove": ["lasso2d", "select2d", "autoScale2d"]}
+
+
+def agent_chart(spec: dict) -> go.Figure | None:
+    """Rebuild a chart the AI requested (make_chart) as an interactive Plotly figure.
+
+    `spec` carries chart_type, x, y, title and the query rows behind the chart.
+    Returns None if the rows don't contain the columns (the PNG is used instead).
+    """
+    import pandas as pd
+    import plotly.express as px
+
+    rows = spec.get("data") or []
+    if not rows:
+        return None
+    df = pd.DataFrame(rows)
+    kind, x, y = (spec.get("chart_type") or "bar").lower(), spec.get("x"), spec.get("y")
+    title = spec.get("title")
+    try:
+        if kind == "histogram":
+            col = x if x in df.columns else y
+            fig = px.histogram(df, x=col, color_discrete_sequence=[PALETTE[0]])
+            fig.update_yaxes(title="Rows")
+            fig.update_xaxes(title=label(col))
+        elif kind == "box":
+            if x and x in df.columns:
+                fig = px.box(df, x=x, y=y, points="outliers", color_discrete_sequence=[PALETTE[1]])
+                fig.update_xaxes(title=label(x))
+            else:
+                fig = px.box(df, y=y, points="outliers", color_discrete_sequence=[PALETTE[1]])
+            fig.update_yaxes(title=label(y))
+        elif x in df.columns and y in df.columns:
+            if kind == "line":
+                fig = px.line(df, x=x, y=y, markers=True, color_discrete_sequence=[PALETTE[0]])
+            elif kind == "scatter":
+                fig = px.scatter(df, x=x, y=y, opacity=.8, color_discrete_sequence=[PALETTE[0]])
+            else:
+                d = df.copy()
+                d[x] = d[x].astype(str)
+                fig = px.bar(d, x=x, y=y, color_discrete_sequence=[PALETTE[0]], text_auto=".3s")
+                fig.update_traces(textposition="outside", cliponaxis=False,
+                                  textfont=dict(color=MUTED))
+                fig.update_xaxes(type="category")
+            fig.update_xaxes(title=label(x))
+            fig.update_yaxes(title=label(y))
+        else:
+            return None
+    except Exception:
+        return None
+    fig.update_traces(hovertemplate=None)
+    return style(fig, title, 380)

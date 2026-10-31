@@ -75,13 +75,25 @@ class AgentResult:
 class _ToolRunner:
     """Executes tool calls and keeps the last query result for chaining."""
 
-    def __init__(self, db_path: str, result: AgentResult):
+    def __init__(self, db_path: str, result: AgentResult,
+                 progress: Callable[[str, str], None] | None = None):
         self.db_path = db_path
         self.result = result
         self.last_query_result: dict | None = None
+        self.progress = progress
+
+    def notify(self, event: str, detail: str = "") -> None:
+        """Report a real step (model call, SQL, analysis, chart) to the UI, if it listens."""
+        if self.progress:
+            try:
+                self.progress(event, detail)
+            except Exception:  # the UI must never break the analysis
+                log.debug("progress callback failed", exc_info=True)
 
     def execute(self, name: str, args: dict) -> dict:
         log.info("tool call: %s args=%s", name, json.dumps(args, default=str)[:300])
+        self.notify({"run_sql": "sql", "run_analysis": "analysis", "make_chart": "chart"}.get(name, name),
+                    args.get("query") or args.get("method") or args.get("chart_type") or "")
         try:
             if name == "run_sql":
                 out = toolmod.run_sql(args["query"], self.db_path)
@@ -112,9 +124,14 @@ class _ToolRunner:
                     x=args.get("x"), y=args.get("y"), title=args.get("title"),
                 )
                 if out.get("image_base64"):
-                    self.result.charts.append(
-                        {"image_base64": out["image_base64"], "title": out.get("title")}
-                    )
+                    df = self.last_query_result.get("_df")
+                    self.result.charts.append({
+                        "image_base64": out["image_base64"],   # matplotlib PNG (used in the PDF report)
+                        "title": out.get("title"),
+                        "chart_type": out.get("chart_type"), "x": out.get("x"), "y": out.get("y"),
+                        # the rows behind the chart, so the UI can redraw it interactively
+                        "data": df.head(500).to_dict(orient="records") if df is not None else [],
+                    })
                 # don't ship the base64 blob back to the model
                 echo = {k: v for k, v in out.items() if k != "image_base64"}
                 echo["rendered"] = bool(out.get("image_base64"))
@@ -143,7 +160,8 @@ def _run_anthropic(system: str, question: str, runner: _ToolRunner,
     messages: list[dict] = list(history or [])
     messages.append({"role": "user", "content": question})
 
-    for _ in range(MAX_STEPS):
+    for step in range(MAX_STEPS):
+        runner.notify("thinking" if step == 0 else "reviewing", DEFAULT_ANTHROPIC_MODEL)
         resp = client.messages.create(
             model=DEFAULT_ANTHROPIC_MODEL,
             max_tokens=1500,
@@ -347,6 +365,7 @@ def _run_openai_compatible(system: str, question: str, runner: _ToolRunner,
 
     for step in range(MAX_STEPS):
         log.info("%s step %d: calling model", model, step + 1)
+        runner.notify("thinking" if step == 0 else "reviewing", model)
         resp = client.chat.completions.create(
             model=model, messages=messages, tools=oa_tools,
         )
@@ -361,6 +380,7 @@ def _run_openai_compatible(system: str, question: str, runner: _ToolRunner,
             if answer:
                 return answer
             log.warning("%s returned empty final text; asking again without tools", model)
+            runner.notify("writing", model)
             # Some providers (notably Gemini) occasionally end with an empty
             # message after tool calls. Ask once more for the written answer.
             messages.append({
@@ -409,8 +429,11 @@ def _short_error(err: str | None) -> str:
         return "request timed out"
     if "empty answer" in low:
         return "returned an empty answer"
-    first = e.splitlines()[0] if e else "unknown error"
-    return first[:120] + ("…" if len(first) > 120 else "")
+    if "connection" in low or "network" in low or "resolve" in low:
+        return "the AI service couldn't be reached"
+    if e.startswith("Missing ") and "_API_KEY" in e:
+        return "an API key is missing"
+    return "the AI service returned an error"  # raw details are logged, never shown
 
 
 def _provider_chain(primary: str) -> list[str]:
@@ -435,8 +458,12 @@ def answer_question(
     schema_text: str,
     provider: str | None = None,
     history: list[dict] | None = None,
+    progress: Callable[[str, str], None] | None = None,
 ) -> AgentResult:
     """Answer with the primary provider; if it fails, retry on each fallback provider.
+
+    `progress(event, detail)` is called for each real step: thinking, sql,
+    analysis, chart, reviewing, writing and fallback.
 
     Never raises — errors are captured on the returned AgentResult.
     """
@@ -445,20 +472,27 @@ def answer_question(
     result: AgentResult | None = None
     chain = _provider_chain(primary)
     log.info("question=%r providers=%s", question[:120], chain)
-    for p in chain:
+    for i, p in enumerate(chain):
+        if i and progress:
+            progress("fallback", p)
         t0 = time.time()
-        result = _answer_with_provider(question, db_path, schema_text, p, history)
+        result = _answer_with_provider(question, db_path, schema_text, p, history, progress)
         log.info("provider=%s done in %.1fs error=%s answer_len=%d", p, time.time() - t0,
                  result.error, len(result.answer or ""))
         if not result.error:
             if failures:
-                result.fallback_note = f"Answered by {p} (fallback). " + "; ".join(failures)
+                log.info("answered by fallback %s after: %s", p, "; ".join(failures))
+                result.fallback_note = "Answered by the backup AI model."
             return result
-        failures.append(f"{p}: {_short_error(result.error)}")
-    if result is not None and len(failures) > 1:
-        result.error = " | ".join(failures)
-        result.answer = "All configured AI providers failed — " + "; ".join(failures) + \
-            ". Please try again in a little while."
+        failures.append(_short_error(result.error))
+    if result is not None:
+        if all(f == "an API key is missing" for f in failures):
+            keys = " or ".join(k for k in (_key_env_for(p) for p in chain) if k)
+            result.answer = f"The AI isn't configured: add {keys} to the app's Secrets."
+        else:
+            reasons = "; ".join(dict.fromkeys(failures))  # unique, in order
+            result.answer = (f"The AI couldn't answer right now ({reasons}). "
+                             "Please try again in a minute.")
     return result
 
 
@@ -468,10 +502,11 @@ def _answer_with_provider(
     schema_text: str,
     provider: str,
     history: list[dict] | None = None,
+    progress: Callable[[str, str], None] | None = None,
 ) -> AgentResult:
     """Run the full agent loop for one question on one provider. Never raises."""
     result = AgentResult(answer="", provider_used=provider)
-    runner = _ToolRunner(db_path, result)
+    runner = _ToolRunner(db_path, result, progress)
     system = build_system_prompt(schema_text)
 
     # resolve which API key env var this provider needs
@@ -483,8 +518,8 @@ def _answer_with_provider(
         key_env = None
 
     if provider != "mock" and key_env and not os.environ.get(key_env):
-        result.error = f"Missing {key_env}. Set it in your environment / Secrets manager."
-        result.answer = result.error
+        result.error = f"Missing {key_env}."
+        result.answer = f"The AI isn't configured: add {key_env} to the app's Secrets."
         return result
 
     try:
@@ -506,9 +541,6 @@ def _answer_with_provider(
         result.steps.append({"elapsed_s": round(time.time() - start, 2)})
     except Exception as e:
         log.exception("provider %s failed", provider)
-        result.error = f"{type(e).__name__}: {e}"
-        result.answer = (
-            "The analysis call failed. This is usually a bad/missing API key, "
-            f"rate limiting, or a network timeout. Details: {result.error}"
-        )
+        result.error = f"{type(e).__name__}: {e}"   # full detail stays in the logs
+        result.answer = f"The AI couldn't answer right now ({_short_error(result.error)})."
     return result
