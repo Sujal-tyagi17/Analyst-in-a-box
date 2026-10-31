@@ -7,6 +7,7 @@ SQL + chart + written insight. Dataset-agnostic end to end.
 from __future__ import annotations
 
 import os
+import json
 import base64
 import tempfile
 
@@ -184,6 +185,26 @@ else:
 # ---------------------------------------------------------------------------
 # Chat history render
 # ---------------------------------------------------------------------------
+class _AnswerFailed(Exception):
+    """Raised inside the cached call so failed answers are never cached."""
+    def __init__(self, result):
+        super().__init__(result.error)
+        self.result = result
+
+
+@st.cache_data(ttl=600, max_entries=200, show_spinner=False)
+def _cached_answer(question, db_path, schema_text, provider, history_json):
+    # If the same question is submitted twice (double click / a rerun while the
+    # first call is still running), Streamlit holds a per-key lock here, so the
+    # second run waits for and reuses the first answer instead of calling the
+    # LLM again and burning free-tier quota.
+    res = answer_question(question, db_path=db_path, schema_text=schema_text,
+                          provider=provider, history=json.loads(history_json))
+    if res.error:
+        raise _AnswerFailed(res)
+    return res
+
+
 def _render_result(res):
     if res.sql_queries:
         with st.expander("🧾 Generated SQL", expanded=False):
@@ -203,7 +224,8 @@ def _render_result(res):
     elif not (res.answer or "").strip():
         st.warning("The model returned an empty answer. Please try asking again.", icon="⚠️")
     else:
-        st.markdown(f'<div class="insight">{res.answer}</div>', unsafe_allow_html=True)
+        # blank lines let Markdown (bold, lists) render inside the styled box
+        st.markdown(f'<div class="insight">\n\n{res.answer}\n\n</div>', unsafe_allow_html=True)
 
 
 for turn in st.session_state.chat:
@@ -250,13 +272,15 @@ if question:
         with st.chat_message("assistant"):
             with st.spinner("Analyzing your data…"):
                 try:
-                    res = answer_question(
+                    res = _cached_answer(
                         question,
-                        db_path=st.session_state.db_path,
-                        schema_text=st.session_state.schema_text,
-                        provider=os.environ.get("LLM_PROVIDER"),
-                        history=st.session_state.history,
+                        st.session_state.db_path,
+                        st.session_state.schema_text,
+                        os.environ.get("LLM_PROVIDER"),
+                        json.dumps(st.session_state.history, default=str),
                     )
+                except _AnswerFailed as f:
+                    res = f.result
                 except Exception as e:  # last-resort guard so the question never vanishes
                     log.exception("answer_question crashed")
                     res = AgentResult(answer=f"Something went wrong: {type(e).__name__}: {e}",

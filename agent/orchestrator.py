@@ -397,6 +397,22 @@ def _key_env_for(provider: str) -> str | None:
     return None
 
 
+def _short_error(err: str | None) -> str:
+    """One-line, human-readable version of a provider error for the UI."""
+    e = err or ""
+    low = e.lower()
+    if "429" in e or "ratelimit" in low or "resource_exhausted" in low or "quota" in low:
+        return "rate/quota limit reached"
+    if "401" in e or "403" in e or "api key" in low or "authentication" in low:
+        return "invalid or missing API key"
+    if "timeout" in low or "timed out" in low:
+        return "request timed out"
+    if "empty answer" in low:
+        return "returned an empty answer"
+    first = e.splitlines()[0] if e else "unknown error"
+    return first[:120] + ("…" if len(first) > 120 else "")
+
+
 def _provider_chain(primary: str) -> list[str]:
     """Primary provider first, then fallbacks from LLM_FALLBACK (default: groq,gemini).
 
@@ -436,15 +452,13 @@ def answer_question(
                  result.error, len(result.answer or ""))
         if not result.error:
             if failures:
-                result.fallback_note = f"Answered by {p} (fallback) — " + "; ".join(failures)
+                result.fallback_note = f"Answered by {p} (fallback). " + "; ".join(failures)
             return result
-        failures.append(f"{p} failed: {result.error}")
+        failures.append(f"{p}: {_short_error(result.error)}")
     if result is not None and len(failures) > 1:
         result.error = " | ".join(failures)
-        result.answer = (
-            "All configured LLM providers failed (bad/missing key, rate limit, or "
-            f"network timeout). Details: {result.error}"
-        )
+        result.answer = "All configured AI providers failed — " + "; ".join(failures) + \
+            ". Please try again in a little while."
     return result
 
 
