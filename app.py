@@ -89,6 +89,7 @@ def _init_state():
     ss.setdefault("pending_q", None)     # queued question from example chips
     ss.setdefault("section", "Overview")   # the section shown (see _go_to)
     ss.setdefault("nav_ver", 0)            # bumped to rebuild the section bar after a code-driven switch
+    ss.setdefault("nav_default", "Overview")  # the bar's default; changes only with nav_ver
     ss.setdefault("uploader_ver", 0)       # bumped to empty the file uploader
     ss.setdefault("original", None)        # snapshot of the uploaded data while cleaned data is active
     ss.setdefault("clean_preview", None)   # cleaning.CleaningResult awaiting the user's decision
@@ -151,7 +152,7 @@ def _go_to(section: str):
     """Switch section from code. Changing a widget's value from code leaves the old
     segment highlighted too, so the section bar is rebuilt with the new default."""
     if ss.get("section") != section:
-        ss.section = section
+        ss.section = ss.nav_default = section
         ss.nav_ver = ss.get("nav_ver", 0) + 1
 
 
@@ -265,13 +266,16 @@ table = ss.schema.tables[0]
 st.markdown(ui.topbar_html(ss.dataset_name, prof.rows, prof.columns,
                            profiling.fmt_bytes(prof.file_bytes or prof.memory_bytes)),
             unsafe_allow_html=True)
-picked = st.segmented_control("Section", list(SECTIONS), default=ss.section,
+# Streamlit treats a widget whose default changes as a new widget, so the default
+# stays fixed between code-driven switches (see _go_to); user clicks set ss.section.
+picked = st.segmented_control("Section", list(SECTIONS), default=ss.nav_default,
                               key=f"nav_{ss.nav_ver}",
                               format_func=lambda s: f"{SECTIONS[s]}\u2002{s}",
                               label_visibility="collapsed")
 if picked:
     ss.section = picked
 else:  # clicking the selected segment deselects it; redraw the bar with it still selected
+    ss.nav_default = ss.section
     ss.nav_ver += 1
     st.rerun()
 nav = ss.section
