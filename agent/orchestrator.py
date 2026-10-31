@@ -16,7 +16,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Callable
 
 from . import tools as toolmod
 from .prompts import build_system_prompt, TOOLS

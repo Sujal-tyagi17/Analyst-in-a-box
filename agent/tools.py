@@ -10,7 +10,7 @@ import os
 import re
 import io
 import base64
-from typing import Any, TYPE_CHECKING
+from typing import Any
 
 import numpy as np
 import pandas as pd
